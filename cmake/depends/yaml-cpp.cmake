@@ -4,8 +4,8 @@ if(NOT TARGET depends::yaml-cpp)
   endif()
   FetchContent_Declare(
     depends-yaml-cpp
-    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-    GIT_TAG        yaml-cpp-0.7.0
+    URL            /Users/kaidongwang/Developer/xrslam-deps-tarballs/yamlcpp.tgz
+    # [bench 2026-08-31] 同一 commit 的 tarball;git 长连接在本机网络下挂死。
   )
   FetchContent_GetProperties(depends-yaml-cpp)
   if(NOT depends-yaml-cpp_POPULATED)

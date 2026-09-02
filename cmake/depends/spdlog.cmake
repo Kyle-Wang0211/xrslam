@@ -4,8 +4,8 @@ if(NOT TARGET depends::spdlog)
   endif()
   FetchContent_Declare(
     depends-spdlog
-    GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG        v1.3.1
+    URL            /Users/kaidongwang/Developer/xrslam-deps-tarballs/spdlog.tgz
+    # [bench 2026-08-31] 同一 commit 的 tarball;git 长连接在本机网络下挂死。
   )
   FetchContent_GetProperties(depends-spdlog)
   if(NOT depends-spdlog_POPULATED)

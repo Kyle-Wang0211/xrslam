@@ -15,8 +15,13 @@ option(XRSLAM_PC_HEADLESS_ONLY "..." OFF)
 option(XRSLAM_IOS "..." OFF)
 option(XRSLAM_TEST "..." OFF)
 
-if(IOS)
+# [bench 2026-08-31] 与主树同样的解耦:上游把线程化写死在 if(IOS) 里,导致
+# Android 拿 OFF、iOS 拿 ON,两端是不同的执行架构而非性能差异。这里只解耦,
+# 不改默认值——两者都由命令行 -D 决定,便于做单变量对比。
+if(IOS AND NOT DEFINED XRSLAM_IOS_OVERRIDE)
   set(XRSLAM_IOS ON)
+endif()
+if(IOS AND NOT DEFINED XRSLAM_THREADING_OVERRIDE)
   set(XRSLAM_ENABLE_THREADING ON)
   #set(XRSLAM_ENABLE_DEBUG_INSPECTION OFF CACHE BOOL "..." FORCE)
 endif()

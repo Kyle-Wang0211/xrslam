@@ -4,8 +4,10 @@ if(NOT TARGET depends::ceres-solver)
   endif()
   FetchContent_Declare(
     depends-ceres-solver
-    GIT_REPOSITORY https://github.com/ceres-solver/ceres-solver.git
-    GIT_TAG        e809cf0c2879f521078b4c9e6329390b42ecf722 # 1.14.0 with std::function fix.
+    URL            /Users/kaidongwang/Developer/xrslam-deps-tarballs/ceres_pinned.tgz
+    # [bench 2026-08-31] 同一个 commit e809cf0c 的 tarball。git 协议的长连接在本机
+    # 网络下会挂死(源码目录 8 分钟停在 80K),tarball 9 秒下完。内容等价,版本已核对
+    # 为 CERES_VERSION 1.14.0。
   )
   FetchContent_GetProperties(depends-ceres-solver)
   if(NOT depends-ceres-solver_POPULATED)

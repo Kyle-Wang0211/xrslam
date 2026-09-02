@@ -7,7 +7,10 @@ include(SuperBuildDepends)
 set(XRSLAM_INTERFACE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(XRSLAM_INTERFACE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-IF (XRSLAM_IOS)
+# [bench 2026-08-31] 静态库与 XRSLAM_IOS 解耦。打包形态和配置传参方式是两件事:
+# 后者由 yaml_config.cpp 的 #if defined(XRSLAM_IOS) 决定(路径 vs 正文),必须保持 OFF
+# 以匹配本 bench 传路径的调用方式;而产物必须是静态库,与现役 vendored 归档一致。
+IF (XRSLAM_IOS OR XRSLAM_STATIC_INTERFACE)
     message(STATUS "xrslam will build as static library")
     add_library(xrslam STATIC
         ${XRSLAM_INTERFACE_INCLUDE_DIR}/XRSLAM.h
