@@ -15,6 +15,17 @@ class FeatureTracker : public Worker {
 
     bool empty() const override { return frames.empty(); }
 
+    // [pw 2026-09-02] 入口队列上界。每个元素是一整帧图像(1920x1440 灰度约
+    // 2.7MB),这里是 threading 开启后无界增长的主体。2 = 一帧在处理、一帧在等,
+    // 既保住异步重叠又把驻留封顶。可用 -DXRSLAM_FEATURE_TRACKER_QUEUE_CAPACITY 覆盖。
+#ifndef XRSLAM_FEATURE_TRACKER_QUEUE_CAPACITY
+#define XRSLAM_FEATURE_TRACKER_QUEUE_CAPACITY 2
+#endif
+    size_t capacity() const override {
+        return XRSLAM_FEATURE_TRACKER_QUEUE_CAPACITY;
+    }
+    size_t pending_locked() const override { return frames.size(); }
+
     /// Bisect variant A: lock-free backlog size only.
     size_t pending_frame_count() const {
         return pending_count_.load(std::memory_order_relaxed);

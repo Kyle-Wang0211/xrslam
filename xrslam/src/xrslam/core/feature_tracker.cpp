@@ -35,6 +35,7 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
     std::unique_ptr<Frame> frame = std::move(frames.front());
     frames.pop_front();
     pending_count_.store(frames.size(), std::memory_order_relaxed);
+    notify_space(); // 腾出一个槽位,放行可能卡在闸口上的生产者
     l.unlock();
 
     frame->image->preprocess(config->feature_tracker_clahe_clip_limit(),
@@ -155,6 +156,8 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
 
 void FeatureTracker::track_frame(std::unique_ptr<Frame> frame) {
     auto l = lock();
+    // 队列满则等消费者取走——阻塞,绝不丢帧。调用方 Detail::track_imu 不持任何锁。
+    await_capacity(l);
     frames.emplace_back(std::move(frame));
     pending_count_.store(frames.size(), std::memory_order_relaxed);
     resume(l);

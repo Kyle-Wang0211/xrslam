@@ -29,6 +29,7 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
     if (initializer) {
         size_t pending_frame_id = pending_frame_ids.front();
         pending_frame_ids.clear();
+        notify_space();
         l.unlock();
         synchronized(detail->feature_tracker->map) {
             initializer->mirror_keyframe_map(detail->feature_tracker->map.get(),
@@ -60,6 +61,7 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
         size_t pending_frame_id = pending_frame_ids.front();
         pending_frame_ids.pop_front();
         pending_count_.store(pending_frame_ids.size(), std::memory_order_relaxed);
+        notify_space();
         l.unlock();
         synchronized(detail->feature_tracker->map) {
             sliding_window_tracker->mirror_frame(
@@ -88,6 +90,9 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
 
 void FrontendWorker::issue_frame(Frame *frame) {
     auto l = lock();
+    // 调用点 feature_tracker.cpp:153 在 synchronized(map) 块之外且 l 已解开,
+    // 不持任何锁,可安全阻塞。
+    await_capacity(l);
     pending_frame_ids.push_back(frame->id());
     pending_count_.store(pending_frame_ids.size(), std::memory_order_relaxed);
     resume(l);

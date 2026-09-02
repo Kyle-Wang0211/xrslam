@@ -20,6 +20,14 @@ class FrontendWorker : public Worker {
 
     bool empty() const override;
 
+    // [pw 2026-09-02] 元素只是 size_t,但每个 id 都钉住 map 里一帧不让释放,
+    // 所以同样要封顶。可用 -DXRSLAM_FRONTEND_QUEUE_CAPACITY 覆盖。
+#ifndef XRSLAM_FRONTEND_QUEUE_CAPACITY
+#define XRSLAM_FRONTEND_QUEUE_CAPACITY 4
+#endif
+    size_t capacity() const override { return XRSLAM_FRONTEND_QUEUE_CAPACITY; }
+    size_t pending_locked() const override { return pending_frame_ids.size(); }
+
     /// Bisect variant A.
     size_t pending_frame_count() const {
         return pending_count_.load(std::memory_order_relaxed);
