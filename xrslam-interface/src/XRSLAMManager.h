@@ -19,6 +19,9 @@ class Image;
 class XRSLAMManager {
   public:
     static XRSLAMManager &Instance();
+
+    /// Bisect variant A.
+    int PendingWorkerFrames() const;
     ~XRSLAMManager();
 
     void Init(std::shared_ptr<Config> config);

@@ -1,4 +1,6 @@
 #include "XRSLAMManager.h"
+#include "xrslam/core/feature_tracker.h"
+#include "xrslam/core/frontend_worker.h"
 
 #define XRSLAM_VERSION "0.1.0"
 
@@ -6,6 +8,17 @@ namespace xrslam {
 XRSLAMManager &XRSLAMManager::Instance() {
     static XRSLAMManager SLAMManagerInstance;
     return SLAMManagerInstance;
+}
+
+int XRSLAMManager::PendingWorkerFrames() const {
+    if (!detail_)
+        return 0;
+    size_t pending = 0;
+    if (detail_->feature_tracker)
+        pending += detail_->feature_tracker->pending_frame_count();
+    if (detail_->frontend)
+        pending += detail_->frontend->pending_frame_count();
+    return static_cast<int>(pending);
 }
 
 XRSLAMManager::XRSLAMManager() {}
@@ -92,6 +105,13 @@ void XRSLAMManager::Init(std::shared_ptr<Config> config) {
 }
 
 void XRSLAMManager::Destroy() {
+    {
+        std::lock_guard<std::mutex> lck(input_mutex_);
+        cur_image_.reset();
+    }
+    // XRSLAM::Detail::~Detail() is the upstream owner of worker stop/join.
+    detail_.reset();
+    config_.reset();
     std::cout << "-----------------Destroy XRSLAM v" << XRSLAM_VERSION
               << " successfully-----------" << std::endl;
 }

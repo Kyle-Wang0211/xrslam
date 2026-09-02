@@ -59,6 +59,7 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
     } else if (sliding_window_tracker) {
         size_t pending_frame_id = pending_frame_ids.front();
         pending_frame_ids.pop_front();
+        pending_count_.store(pending_frame_ids.size(), std::memory_order_relaxed);
         l.unlock();
         synchronized(detail->feature_tracker->map) {
             sliding_window_tracker->mirror_frame(
@@ -88,6 +89,7 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
 void FrontendWorker::issue_frame(Frame *frame) {
     auto l = lock();
     pending_frame_ids.push_back(frame->id());
+    pending_count_.store(pending_frame_ids.size(), std::memory_order_relaxed);
     resume(l);
 }
 

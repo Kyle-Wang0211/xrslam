@@ -34,6 +34,7 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
 
     std::unique_ptr<Frame> frame = std::move(frames.front());
     frames.pop_front();
+    pending_count_.store(frames.size(), std::memory_order_relaxed);
     l.unlock();
 
     frame->image->preprocess(config->feature_tracker_clahe_clip_limit(),
@@ -155,6 +156,7 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
 void FeatureTracker::track_frame(std::unique_ptr<Frame> frame) {
     auto l = lock();
     frames.emplace_back(std::move(frame));
+    pending_count_.store(frames.size(), std::memory_order_relaxed);
     resume(l);
 }
 

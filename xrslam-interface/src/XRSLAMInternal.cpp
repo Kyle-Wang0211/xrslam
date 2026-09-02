@@ -88,3 +88,7 @@ void XRSLAMGetResult(XRSLAMResultType result_type, // result type
 }
 
 void XRSLAMDestroy() { xrslam::XRSLAMManager::Instance().Destroy(); }
+
+extern "C" int XRSLAMGetPendingWorkerFrames(void) {
+    return xrslam::XRSLAMManager::Instance().PendingWorkerFrames();
+}

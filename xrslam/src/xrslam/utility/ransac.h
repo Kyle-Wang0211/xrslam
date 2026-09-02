@@ -36,9 +36,13 @@ struct Ransac {
 
         inlier_count = 0;
 
+        // Preserve the caller contract on every exit. If every sampled model
+        // has zero inliers, the strict `>` update below never swaps a mask.
+        // "No model" is therefore represented by an input-sized all-zero mask.
+        std::vector<char> zero(size, 0);
+        inlier_mask.swap(zero);
+
         if (size < ModelDoF) {
-            std::vector<char> _(size, 0);
-            inlier_mask.swap(_);
             return model;
         }
 

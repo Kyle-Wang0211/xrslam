@@ -1,6 +1,7 @@
 #ifndef XRSLAM_FEATURE_TRACKER_H
 #define XRSLAM_FEATURE_TRACKER_H
 
+#include <atomic>
 #include <xrslam/common.h>
 #include <xrslam/estimation/state.h>
 #include <xrslam/utility/worker.h>
@@ -13,6 +14,11 @@ class FeatureTracker : public Worker {
     ~FeatureTracker();
 
     bool empty() const override { return frames.empty(); }
+
+    /// Bisect variant A: lock-free backlog size only.
+    size_t pending_frame_count() const {
+        return pending_count_.load(std::memory_order_relaxed);
+    }
 
     void work(std::unique_lock<std::mutex> &l) override;
 
@@ -35,6 +41,7 @@ class FeatureTracker : public Worker {
   private:
     XRSLAM::Detail *detail;
     std::deque<std::unique_ptr<Frame>> frames;
+    std::atomic<size_t> pending_count_{0};
     std::shared_ptr<Config> config;
     std::optional<std::tuple<double, PoseState, MotionState>> latest_state;
     mutable std::mutex latest_pose_mutex;

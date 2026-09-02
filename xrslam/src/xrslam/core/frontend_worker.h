@@ -1,5 +1,6 @@
 #ifndef XRSLAM_FRONTEND_WORKER_H
 #define XRSLAM_FRONTEND_WORKER_H
+#include <atomic>
 #include <xrslam/common.h>
 #include <xrslam/estimation/state.h>
 #include <xrslam/utility/worker.h>
@@ -18,6 +19,11 @@ class FrontendWorker : public Worker {
     ~FrontendWorker();
 
     bool empty() const override;
+
+    /// Bisect variant A.
+    size_t pending_frame_count() const {
+        return pending_count_.load(std::memory_order_relaxed);
+    }
     void work(std::unique_lock<std::mutex> &l) override;
 
     void issue_frame(Frame *frame);
@@ -36,6 +42,7 @@ class FrontendWorker : public Worker {
 
   private:
     std::deque<size_t> pending_frame_ids;
+    std::atomic<size_t> pending_count_{0};
 
     XRSLAM::Detail *detail;
     std::shared_ptr<Config> config;
