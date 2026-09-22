@@ -94,6 +94,18 @@ class YamlConfig : public Config {
     double rotation_misalignment_threshold() const override;
     double rotation_ransac_threshold() const override;
 
+    // [pw] 条目 17 / 条目 08:内部工作集硬上限 + IMU 时基监视。
+    //      yaml 键全部可选;不写就用 Config 基类的默认值。
+    size_t runtime_max_raw_imu_queue() const override;
+    size_t runtime_max_pending_imu() const override;
+    size_t runtime_max_frontal_imu() const override;
+    size_t runtime_max_pending_camera_frames() const override;
+    size_t runtime_max_tracking_map_frames() const override;
+    size_t runtime_max_pending_frame_ids() const override;
+    size_t imu_timing_warmup_samples() const override;
+    size_t imu_timing_window_samples() const override;
+    double imu_timing_batch_gap_ratio() const override;
+
   private:
     vector<2> m_camera_resolution;
     matrix<3> m_camera_intrinsic;
@@ -156,6 +168,16 @@ class YamlConfig : public Config {
 
     double m_rotation_misalignment_threshold;
     double m_rotation_ransac_threshold;
+
+    size_t m_runtime_max_raw_imu_queue;
+    size_t m_runtime_max_pending_imu;
+    size_t m_runtime_max_frontal_imu;
+    size_t m_runtime_max_pending_camera_frames;
+    size_t m_runtime_max_tracking_map_frames;
+    size_t m_runtime_max_pending_frame_ids;
+    size_t m_imu_timing_warmup_samples;
+    size_t m_imu_timing_window_samples;
+    double m_imu_timing_batch_gap_ratio;
 };
 
 } // namespace xrslam::extra

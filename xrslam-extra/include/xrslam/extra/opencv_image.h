@@ -2,7 +2,14 @@
 #define XRSLAM_EXTRA_OPENCV_IMAGE_H
 
 #include <ceres/cubic_interpolation.h>
+// [pw] 跨 OpenCV 大版本兼容:5.x 把 features2d.hpp 改名为 features.hpp。
+// 目标是跨端,而 Android NDK / 各发行版的 OpenCV 版本不一致,不能硬绑一个。
+#include <opencv2/core/version.hpp>
+#if CV_VERSION_MAJOR >= 5
 #include <opencv2/features.hpp>
+#else
+#include <opencv2/features2d.hpp>
+#endif
 #include <opencv2/opencv.hpp>
 #include <xrslam/xrslam.h>
 

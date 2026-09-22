@@ -1,0 +1,5 @@
+# [pw] Apple ld64 -exported_symbols_list —— Apple 的链接器不认 --version-script。
+# Mach-O 的 C 符号带一个前导下划线,所以是 _XRSLAM* 而不是 XRSLAM*。
+# 未列出的符号会被降级成 private extern(N_PEXT),不再出现在动态导出面上。
+_XRSLAM*
+_xrslam_*

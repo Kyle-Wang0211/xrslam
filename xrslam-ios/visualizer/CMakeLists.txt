@@ -17,10 +17,12 @@ set(MAIN_STORYBOARD Main)
 set(SWIFT_OBJC_BRIDGING_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/src/SwiftBridge.h)
 
 set(INFO_PLIST_TEMPLATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Info.plist.in)
-include_directories(${CMAKE_SOURCE_DIR}/include/)
+# [pw] CMAKE_SOURCE_DIR -> XRSLAM_ROOT_DIR(嵌入构建时前者指向外层工程根;
+#      本文件第 3 行自己 project(),所以 PROJECT_SOURCE_DIR 也不是仓库根)。
+include_directories(${XRSLAM_ROOT_DIR}/xrslam-interface/include/)
 set(XRSLAM_IOS_VISUALIZER_SOURCES
-    ${CMAKE_SOURCE_DIR}/include/XRSLAM.h
-    ${CMAKE_SOURCE_DIR}/xrslam-localization/include/XRGlobalLocalizer.h
+    ${XRSLAM_ROOT_DIR}/xrslam-interface/include/XRSLAM.h
+    ${XRSLAM_ROOT_DIR}/xrslam-localization/include/XRGlobalLocalizer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/XRSLAM_iOS.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/XRSLAM_iOS.mm
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Camera.swift

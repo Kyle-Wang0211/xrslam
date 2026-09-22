@@ -162,8 +162,123 @@ class Config {
     virtual bool depth_fusion_enabled() const;
     virtual double depth_prior_weight() const;
 
+    // [pw] 条目 17:内部工作集的内存硬上限。全部以"元素个数"计,0 = 不设上限。
+    //      裁剪策略一律是丢最老(FIFO),每次裁剪都计数(见 get_memory_budget_stats)。
+    //      ⚠ runtime_max_pending_camera_frames 默认 0(= 保持改动前行为):
+    //        它是唯一会在 VIO 轨迹上留下永久空洞的上限,需要产品侧签决后再开。
+    virtual size_t runtime_max_raw_imu_queue() const;
+    virtual size_t runtime_max_pending_imu() const;
+    virtual size_t runtime_max_frontal_imu() const;
+    virtual size_t runtime_max_pending_camera_frames() const;
+    virtual size_t runtime_max_tracking_map_frames() const;
+    virtual size_t runtime_max_pending_frame_ids() const;
+
+    // [pw] 条目 08:IMU 时基实测窗口 + 成簇上报检测。
+    virtual size_t imu_timing_warmup_samples() const;
+    virtual size_t imu_timing_window_samples() const;
+    virtual double imu_timing_batch_gap_ratio() const;
+
     void log_config() const;
 };
+
+// ---------------------------------------------------------------------------
+// [pw] 核内只读遥测。三个 get_* 都是线程安全的(逐字段 relaxed 原子读),
+//      但**不是**跨字段的一致快照:同一次调用里不同字段可能来自相邻两帧。
+//      为 C API 健康状态机准备,核内不改 C API。
+// ---------------------------------------------------------------------------
+
+// 「这一帧到底有没有用上 IMU」
+struct FrameHealth {
+    unsigned long long frame_seq;   // 每帧 +1;两次读到同一个值 = 期间没有新帧
+    double frame_t;                 // 该帧的图像时间戳 [s]
+    int imu_samples;                // 该帧收到的**真实** IMU 样本数(补桩之前)。
+                                    // **0 = 该帧完全没有惯性观测**,静默退化成纯单目。
+                                    // -1 = 还没有任何帧到达跟踪器。
+    int imu_samples_integrated;     // 实际进入预积分的样本数。⚠ 与上一个字段的差
+                                    // 就是 feature_tracker 补进去的**合成**样本
+                                    // (上一帧最后一个样本改时间戳)。
+                                    // imu_samples==0 而本字段==1 = 纯外推,不是观测。
+    int detected_keypoints;         // 该帧检出后的关键点总数(含跟踪继承来的)
+    int tracked_keypoints;          // 从上一帧成功传递过来的关键点数
+                                    // (LK 之后,再经本质矩阵 + 泊松盘筛完的存活数)
+    int inlier_keypoints;           // LK 存活里通过本质矩阵几何校验的内点数
+    int mapped_landmarks;           // 滑窗最新帧看到的 VALID&TRIANGULATED&STATIC 轨迹数;
+                                    // -1 = 后端还没跑起来
+    unsigned long long imu_starved_frames; // 累计出现 imu_samples==0 的帧数
+};
+void get_frame_health(FrameHealth &out);
+
+// 不想引入结构体的调用方可以直接前向声明这一个(与 get_depth_fusion_stats 同款)。
+void get_frame_health_counters(int &imu_samples, int &tracked_keypoints,
+                               int &inlier_keypoints, int &detected_keypoints);
+
+// IMU 时基的实测结果(条目 08)
+struct ImuTiming {
+    unsigned long long samples;   // 已进入核心的 IMU 样本数
+    bool warmed_up;               // false 时下面的实测值全部无效
+    double measured_dt_median;    // 实测相邻 Δ 的中位数(成簇时取批内那一簇)[s]
+    double measured_rate_hz;      // 1 / measured_dt_median
+    double jitter_cv;             // 批内 Δ 的变异系数
+    bool batched;                 // Δ 直方图双峰 ⇒ 成簇(批量)上报
+    double batch_period;          // 批与批之间的中位间隔 [s](非成簇为 0)
+    double batch_size;            // 估计的每批样本数(非成簇为 0)
+    bool fabricated_uniform;      // 到达成簇(或时间戳双峰)且 Δ 的 CV < 1e-3
+                                  // ⇒ 时间戳疑似等距伪造
+    unsigned long long nonmonotonic_samples; // Δ<=0 的样本数(回退/重复时间戳)
+
+    // [pw] 到达时钟侧。**这一路才是"成簇上报"的真判据**:一台 200Hz 连续采样、
+    //      每 20ms 交付一批的手机,时间戳序列是连续无缺口的,batched(上面那个,
+    //      看时间戳直方图)恒为 false —— 只有样本"什么时候到手"里才有痕迹。
+    bool arrival_realtime;        // false = 样本几乎全部瞬间到达 ⇒ 离线回放,
+                                  //         下面两个字段无意义,别用来判设备行为
+    bool arrival_batched;         // arrival_realtime 且到达 Δ 呈"多个≈0 + 一个大"
+    double arrival_burst_ratio;   // 到达 Δ < 0.25×标称间隔的比例
+    double arrival_batch_size;    // 估计的每批样本数 = 1/(1-burst_ratio)
+    double arrival_batch_period;  // 批与批之间到达间隔的中位数 [s]
+};
+void get_imu_timing(ImuTiming &out);
+
+// 内部工作集的深度 / 高水位 / 裁剪计数(条目 17)
+struct MemoryBudgetStats {
+    // 当前深度
+    unsigned long long raw_gyro_queue;
+    unsigned long long raw_accel_queue;
+    unsigned long long pending_imu_queue;
+    unsigned long long frontal_imu_queue;
+    unsigned long long pending_camera_frames;
+    unsigned long long tracker_frame_queue;
+    unsigned long long tracking_map_frames;
+    unsigned long long tracking_map_tracks;
+    unsigned long long pending_frame_ids;
+    unsigned long long sliding_window_frames;
+    unsigned long long sliding_window_tracks;
+    // 历史高水位
+    unsigned long long hw_raw_gyro;
+    unsigned long long hw_raw_accel;
+    unsigned long long hw_pending_imu;
+    unsigned long long hw_frontal_imu;
+    unsigned long long hw_pending_camera_frames;
+    unsigned long long hw_tracker_frame_queue;
+    unsigned long long hw_tracking_map_frames;
+    // 累计裁剪(全部是丢最老)
+    unsigned long long dropped_raw_gyro;
+    unsigned long long dropped_raw_accel;
+    unsigned long long dropped_pending_imu;
+    unsigned long long dropped_frontal_imu;
+    unsigned long long dropped_pending_camera_frames;
+    unsigned long long dropped_tracker_frame_queue;
+    unsigned long long dropped_tracking_map_frames;
+    unsigned long long dropped_pending_frame_ids;
+    // detail.cpp 里 gyroscopes.clear() 的可观测性
+    unsigned long long gyro_buffer_clears;
+    unsigned long long gyro_samples_dropped_by_clear;
+    // track_accelerometer 的镜像缺口:没有陀螺下界时加速度样本被整个丢掉
+    unsigned long long accel_dropped_no_bracket;
+    // 预积分时间戳异常
+    unsigned long long nonmonotonic_imu_dt;
+    unsigned long long zero_imu_dt;
+};
+void get_memory_budget_stats(MemoryBudgetStats &out);
 
 class Image {
   public:

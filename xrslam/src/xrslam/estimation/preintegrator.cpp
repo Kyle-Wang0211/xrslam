@@ -1,6 +1,7 @@
 #include <xrslam/estimation/preintegrator.h>
 #include <xrslam/geometry/lie_algebra.h>
 #include <xrslam/map/frame.h>
+#include <xrslam/utility/runtime_budget.h>
 
 namespace xrslam {
 
@@ -22,6 +23,27 @@ void PreIntegrator::reset() {
 void PreIntegrator::increment(double dt, const ImuData &data,
                               const vector<3> &bg, const vector<3> &ba,
                               bool compute_jacobian, bool compute_covariance) {
+    // [pw] 条目 08 —— dt **来自实测的相邻样本时间戳**(见下面 integrate()),
+    //      不是 yaml 频率;yaml 给的 cov_w/cov_a 是**连续时间**噪声密度,
+    //      下面 `cov_* * inv_dt` 这一步才是用实测 dt 做的离散化。
+    //      原来这里只有一条 runtime_assert(dt >= 0),而 runtime_assert 在
+    //      Release 下被展开成空(utility/debug.h:44)⇒ 出货构建里一个回退的
+    //      时间戳会带着**负 dt** 一路进 A/B 矩阵,静默污染共分散且无任何痕迹。
+    //      现在:计数 + 钳到 0(等价于忽略该样本的时间推进),不再静默。
+    if (!(dt >= 0.0)) {
+        auto &c = runtime::counters();
+        unsigned long long n =
+            c.nonmonotonic_imu_dt.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (runtime::should_log_at(n)) {
+            log_warning("[pw][imu] 预积分收到负 dt=%.9fs,已钳到 0"
+                        "(累计 %llu)。上游 IMU 时间戳非单调。",
+                        dt, n);
+        }
+        dt = 0.0;
+    } else if (dt == 0.0) {
+        runtime::counters().zero_imu_dt.fetch_add(1,
+                                                  std::memory_order_relaxed);
+    }
     runtime_assert(dt >= 0, "dt cannot be negative.");
 
     vector<3> w = data.w - bg;
@@ -81,6 +103,10 @@ bool PreIntegrator::integrate(double t, const vector<3> &bg,
     if (data.size() == 0)
         return false;
     reset();
+    // [pw] 条目 08 的确切证据就在这两行:每一步的 dt = 相邻两个 IMU 样本的
+    //      **实测时间戳之差**,以及末段 `t - data.back().t`(t = 图像时间戳)。
+    //      全树没有任何"采样频率"配置项(yaml 里 imu.* 只有 noise.cov_*),
+    //      所以"dt 来自 yaml"这一条在本仓不成立。
     for (size_t i = 0; i + 1 < data.size(); ++i) {
         const ImuData &d = data[i];
         increment(data[i + 1].t - d.t, d, bg, ba, compute_jacobian,

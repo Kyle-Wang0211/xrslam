@@ -11,6 +11,7 @@
 #include <xrslam/map/frame.h>
 #include <xrslam/map/map.h>
 #include <xrslam/map/track.h>
+#include <xrslam/utility/runtime_budget.h>
 #include <xrslam/utility/unique_timer.h>
 
 #include <atomic>
@@ -220,10 +221,19 @@ bool SlidingWindowTracker::manage_keyframe() {
         }
     }
 
+    // [pw] 任务 3:发布滑窗最新帧能看到多少张已建图的地标。
+    //      与 tracked/inlier 一起构成"视觉这边还剩多少约束"的三件套。
+    runtime::frame_health_atomics().mapped_landmarks.store(
+        (int)mapped_landmark_count, std::memory_order_relaxed);
+
     bool is_keyframe = mapped_landmark_count <
                        config->sliding_window_force_keyframe_landmarks();
 
-#if defined(XRSLAM_IOS)
+// [pw] 原为 #if defined(XRSLAM_IOS)。这是**关键帧判定规则**本身:手持场景下任何有平移的
+//      帧都强制成关键帧。以前只有 iOS 生效 ⇒ Android 的关键帧策略与 iOS 不同,
+//      两端 VIO 轨迹没有可比性。归到手持/低延迟这一组开关下。
+//      ⚠ 若你认为它应当独立成 XRSLAM_HANDHELD_KEYFRAME_POLICY,只需改宏名。
+#if defined(XRSLAM_LOWLATENCY_POSE)
     is_keyframe = is_keyframe || !newframe_j->tag(FT_NO_TRANSLATION);
 #endif
 
@@ -420,6 +430,15 @@ void SlidingWindowTracker::refine_window() {
 }
 
 void SlidingWindowTracker::slide_window() {
+    // [pw] 条目 15 / 任务 4 的确切证据:滑窗长度由 config->sliding_window_size()
+    //      钉死(基类默认 10,configs/iphone_slam.yaml 也是 10),多出来的最老
+    //      关键帧走 marginalize_frame(0) 做 Schur 边缘化。refine_window() 会把
+    //      窗内**每一帧**的 motion(v/bg/ba)都作为自由参数块加进 solver
+    //      (solver.cpp add_frame_states 的 with_motion 分支),所以 bias 确实是
+    //      **滑动窗口内**在线估计的,不是一次性标定常数。
+    //      ⚠ 但窗口不是无记忆的:被边缘化掉的帧会以先验的形式留在
+    //        marginalization_factor 里,历史 bias 信息会一直累积。温度滞回下
+    //        这个先验会和真实漂移的 bias 对抗 —— 见报告,本轮不改。
     while (map->frame_num() > config->sliding_window_size()) {
         Frame *frame = map->get_frame(0);
         for (size_t i = 0; i < frame->subframes.size(); ++i) {
@@ -427,6 +446,11 @@ void SlidingWindowTracker::slide_window() {
         }
         map->marginalize_frame(0);
     }
+    auto &c = runtime::counters();
+    c.depth_sliding_window_frames.store(map->frame_num(),
+                                        std::memory_order_relaxed);
+    c.depth_sliding_window_tracks.store(map->track_num(),
+                                        std::memory_order_relaxed);
 }
 
 void SlidingWindowTracker::refine_subwindow() {

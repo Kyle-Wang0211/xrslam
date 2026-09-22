@@ -45,7 +45,11 @@ class Worker {
     virtual void work(std::unique_lock<std::mutex> &l) = 0;
 
   protected:
-    std::atomic<bool> worker_running;
+    // [pw] 原为 std::atomic<bool> worker_running;(默认初始化)。C++17 下 std::atomic
+    //      的默认构造**不做值初始化**,值不确定;而 Worker(){} 不赋值、~Worker() 无条件
+    //      调 stop() 读它。若构造完成到 start() 之间抛异常,析构就会拿着垃圾值进 stop(),
+    //      在 XRSLAM_ENABLE_THREADING 打开时对未启动的 std::thread 调 join() ⇒ terminate。
+    std::atomic<bool> worker_running{false};
 
   private:
     void worker_loop();

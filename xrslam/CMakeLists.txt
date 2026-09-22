@@ -3,6 +3,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
 project(xrslam-library VERSION 0.5.0 LANGUAGES CXX)
 
 include(SuperBuildDepends)
+include(XRSlamHardening)
 superbuild_depend(eigen)
 superbuild_depend(ceres-solver)
 superbuild_depend(spdlog)
@@ -144,6 +145,12 @@ target_compile_definitions(xrslam-core
     XRSLAM_ENABLE_VISUAL_LOCALIZATION=$<BOOL:${XRSLAM_ENABLE_VISUAL_LOCALIZATION}>
 )
 
+# [pw] 此处曾加过 target_compile_definitions(... XRSLAM_ENABLE_THREADING),已撤销。
+#      前提是错的:该宏一直经 cmake/version.h.in 的 #cmakedefine 下发,
+#      并由 common.h:38 -> xrslam/xrslam.h -> xrslam/version.h 传到每个 TU。
+#      判据"ninja -t commands | grep = 0"查的是命令行,查错了地方。
+#      同时下发会造成宏重定义(-D 定义为 1,#cmakedefine 定义为空),实测 1 条告警。
+
 target_link_libraries(xrslam-core
 PUBLIC
   options::modern-cpp
@@ -152,5 +159,13 @@ PUBLIC
   depends::ceres-solver
   depends::opencv
 )
+
+# [pw] Blocker 02 第 1 层:内部静态库编译期隐藏。
+#      xrslam-core 里没有任何 C API,整库都该是 hidden。这一层对 iOS 尤其重要:
+#      iOS 走静态库 + libtool 合并,**没有我们控制的链接步骤**,链接期导出裁剪
+#      够不着,只有编译期可见性能把我们自己的符号挡在 App 的导出面之外。
+#      注意用 target 属性而不是 add_compile_options —— 后者是目录属性,会顺着
+#      上面 superbuild_depend() 里的 add_subdirectory 泼到 ceres/spdlog 上。
+xrslam_hide_internal_symbols(xrslam-core)
 
 set(XRSLAM_LIBRARY_DIR ${CMAKE_CURRENT_BINARY_DIR} CACHE INTERNAL "")

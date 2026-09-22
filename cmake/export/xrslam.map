@@ -1,0 +1,23 @@
+# [pw] GNU/lld version script — ELF only (Android, Linux, OHOS).
+#
+# 为什么必须有:Flutter 进程里永远不止一个 .so。ELF 的符号插入(interposition)
+# 让全局符号按**加载顺序**绑定。本库把 libc++ 静态链进来(NDK 默认 c++_static),
+# 于是 operator new/delete、__cxa_throw/__cxa_begin_catch 全都成了本 .so 的
+# DEFINED 全局符号(实测 6558 个 DEFINED 里就有这一整套)。后果有两条:
+#   1) 我们这边 new 出来的对象可能被别的 .so 里的 delete 释放 ⇒ 堆损坏;
+#   2) 更精准也更致命:__cxa_throw / __cxa_begin_catch 被插入后,
+#      我们为了兜住 extern "C" 边界(CERT ERR59-CPP)写的 try/catch 会被打穿。
+#
+# 用**匿名**版本节点(前面不写版本名):这样导出的符号不会被打上 @@VERSION 标签,
+# dart:ffi 的 DynamicLibrary.lookup / dlsym 拿到的还是裸名字,ABI 表现不变。
+# 换成具名节点会变成 XRSLAMCreate@@XRSLAM_1.0,不必要地改变对外表现。
+#
+# 只用通配符条目:Android 的链接行带 -Wl,--no-undefined-version,
+# **精确**符号名若在本次链接中不存在会直接报错;通配符条目不受该检查约束。
+{
+  global:
+    XRSLAM*;
+    xrslam_*;
+  local:
+    *;
+};

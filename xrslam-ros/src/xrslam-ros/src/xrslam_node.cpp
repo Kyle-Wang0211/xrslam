@@ -85,12 +85,15 @@ void process() {
                          457.296, 248.375, 0, 0, 1);
             cv::undistort(img_distorted, img, K, dist_coeffs);
 
-            XRSLAMImage image;
+            XRSLAMImage image{}; // [pw] 必须零初始化:width/height 是末尾新增字段
             image.camera_id = 0;
             image.timeStamp = image_msg->header.stamp.toSec();
             image.ext = nullptr;
             image.data = img.data;
-            image.stride = img.step[0];
+            image.stride = (int)img.step[0]; // bytes per row
+            image.channel = img.channels();  // [pw] 上游这里压根没赋值,是栈垃圾
+            image.width = img.cols;
+            image.height = img.rows;
 
             XRSLAMPushSensorData(XRSLAM_SENSOR_CAMERA, &image);
             XRSLAMRunOneFrame();

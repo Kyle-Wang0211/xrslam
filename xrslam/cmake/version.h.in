@@ -14,9 +14,13 @@
 #cmakedefine XRSLAM_DEBUG
 #cmakedefine XRSLAM_ENABLE_DEBUG_INSPECTION
 #cmakedefine XRSLAM_ENABLE_THREADING
-#cmakedefine XRSLAM_PC_HEADLESS_ONLY
 #cmakedefine XRSLAM_IOS
 #cmakedefine XRSLAM_TEST
+// [pw] 从 XRSLAM_IOS 拆出来的两个正交开关。原先这两块逻辑挂在 XRSLAM_IOS 上,
+//      导致 iOS 与 Android 跑的是结构性不同的算法(位姿输出率/关键帧规则),
+//      直接违背"一套管线服务所有端"。两端一律默认 ON。
+#cmakedefine XRSLAM_CONFIG_FROM_STRING
+#cmakedefine XRSLAM_LOWLATENCY_POSE
 // clang-format on
 
 #endif // XRSLAM_VERSION_H

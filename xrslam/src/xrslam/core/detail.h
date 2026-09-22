@@ -2,6 +2,7 @@
 #define XRSLAM_DETAIL_H
 
 #include <xrslam/common.h>
+#include <xrslam/utility/runtime_budget.h>
 #include <xrslam/xrslam.h>
 #include <mutex>
 namespace xrslam {
@@ -66,6 +67,16 @@ struct XRSLAM::Detail {
     std::deque<ImuData> imus;
     std::deque<std::unique_ptr<Frame>> frames;
     std::deque<ImuData> frontal_imus;
+
+    // [pw] 条目 08:IMU 时基监视器(实测 Δ 中位数 + 成簇上报检测)。
+    //      只由 track_imu 一个入口喂,和上面这些队列同线程。
+    runtime::ImuTimingMonitor imu_timing_;
+
+    // [pw] 条目 17:构造时缓存的硬上限,避免每个 IMU 样本一次虚调用。
+    size_t cap_raw_imu_queue_ = 0;
+    size_t cap_pending_imu_ = 0;
+    size_t cap_frontal_imu_ = 0;
+    size_t cap_pending_camera_frames_ = 0;
 
     std::shared_ptr<Config> config;
 };

@@ -24,7 +24,32 @@ if(NOT TARGET depends::ceres-solver)
   set(CXSPARSE OFF CACHE BOOL "" FORCE)
   set(TBB OFF CACHE BOOL "" FORCE)
   set(OPENMP OFF CACHE BOOL "" FORCE)
-  set(LAPACK ON CACHE BOOL "" FORCE)
+  # [pw] LAPACK 在移动端一律关闭,且不依赖 Ceres 内部保护:
+  #  - iOS: Ceres 2.2.0 CMakeLists:173 的 if(IOS) 会 update_cache_variable(LAPACK OFF),
+  #    但那依赖 ios.toolchain.cmake 定义的 IOS 变量。若改用 CMake 3.14+ 原生的
+  #    CMAKE_SYSTEM_NAME=iOS 交叉编译,该保护静默失效,而链入 BLAS 的 dsyrk_ 符号
+  #    有 App Store 审核风险(Ceres 上游注释即为此)。
+  #  - Android/鸿蒙: find_package(LAPACK) 通常找不到,Ceres 会在 :278 自动降级;
+  #    但若构建机恰好装了某个 BLAS 实现,会被静默链入(许可与 ABI 均不可控)。
+  #  桌面保留 ON,便于开发期做性能对照。
+  if(IOS OR ANDROID OR OHOS
+     OR CMAKE_SYSTEM_NAME MATCHES "iOS|watchOS|tvOS|visionOS|Android|OHOS")
+    set(LAPACK OFF CACHE BOOL "" FORCE)
+  else()
+    set(LAPACK ON CACHE BOOL "" FORCE)
+  endif()
+
+  # [pw] 跨端数值对称:Ceres 在 Apple 平台会**自动探测并打开** ACCELERATESPARSE,
+  #   而 Android 上没有 Accelerate ⇒ 两端走不同的稀疏求解器 ⇒ 同一份源码得到
+  #   不同的数值结果。这与 XRSLAM_IOS 一个宏控三件事是同一类病,只是藏在依赖的
+  #   自动探测里,我们那条 LAPACK 守卫覆盖不到。
+  #   原则同 OpenCV 侧的 KleidiCV 取舍:**对称且慢,好过不对称且快**。
+  #   留成 cache 变量以便将来做 A/B,但默认必须是 OFF。
+  set(XRSLAM_CERES_ACCELERATE_SPARSE OFF CACHE BOOL
+      "Allow Ceres to use Apple Accelerate sparse solvers (breaks iOS/Android numerical symmetry)")
+  if(NOT XRSLAM_CERES_ACCELERATE_SPARSE)
+    set(ACCELERATESPARSE OFF CACHE BOOL "" FORCE)
+  endif()
   set(MINIGLOG_MAX_LOG_LEVEL 0 CACHE STRING "" FORCE)
   set(EIGEN_PREFER_EXPORTED_EIGEN_CMAKE_CONFIGURATION OFF CACHE BOOL "" FORCE)
   set(EIGEN_INCLUDE_DIR ${depends-eigen-source-dir} CACHE PATH "" FORCE)

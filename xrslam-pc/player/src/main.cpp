@@ -1,4 +1,6 @@
 #include <argparse.hpp>
+#include <cstdint>
+#include <vector>
 #include <iostream>
 #include <thread>
 #include <mutex>
@@ -33,13 +35,28 @@ void GetShowElements() {
         pose_c.translation[1],
         pose_c.translation[2]);
 
-    XRSLAMLandmarks landmarks;
-    XRSLAMGetResult(XRSLAM_RESULT_LANDMARKS, &landmarks);
+    // [pw] caller-allocates 两段式。缓冲一次分配长期复用:稳态下每帧只有
+    //      1 次调用、0 次分配、0 次拷贝。原写法是未初始化的 XRSLAMLandmarks +
+    //      库内 new[] + 无人 delete[](每帧泄漏 24 x n 字节)。
+    static std::vector<double> lm_xyz(3 * 1024);
     std::vector<Eigen::Vector3f> points;
-    points.reserve(landmarks.num_landmarks);
-    for (int i = 0; i < landmarks.num_landmarks; ++i) {
-        XRSLAMLandmark &landmark = landmarks.landmarks[i];
-        points.emplace_back(landmark.x, landmark.y, landmark.z);
+    int32_t n = static_cast<int32_t>(lm_xyz.size() / 3);
+    int rc = XRSLAMGetLandmarks(lm_xyz.data(), &n);
+    if (rc == XRSLAM_INCOMPLETE) {          // 只在滑窗首次超出预设容量时发生一次
+        int32_t need = 0;
+        XRSLAMGetLandmarks(nullptr, &need); // 问总量
+        lm_xyz.resize(3 * static_cast<size_t>(need) * 2);
+        n = static_cast<int32_t>(lm_xyz.size() / 3);
+        rc = XRSLAMGetLandmarks(lm_xyz.data(), &n);
+    }
+    if (rc < 0) {
+        n = 0; // XRSLAM_ERR_UNAVAILABLE 说明这个构建关掉了 inspection
+    }
+    points.reserve(static_cast<size_t>(n));
+    for (int32_t i = 0; i < n; ++i) {
+        points.emplace_back(static_cast<float>(lm_xyz[3 * i + 0]),
+                            static_cast<float>(lm_xyz[3 * i + 1]),
+                            static_cast<float>(lm_xyz[3 * i + 2]));
     }
 
     VisData::Frame frame = VisData::Frame(cv::Mat(), intrinsics_v, pose_c_m);
@@ -137,13 +154,15 @@ int main(int argc, char *argv[]) {
             }
 
             auto [t, img] = reader->read_image();
-            XRSLAMImage image;
+            XRSLAMImage image{}; // [pw] 必须零初始化:width/height 是末尾新增字段
             image.camera_id = 0;
             image.timeStamp = t;
             image.ext = nullptr;
             image.data = img.data;
             image.channel = img.channels();
-            image.stride = img.step[0];
+            image.stride = (int)img.step[0]; // bytes per row
+            image.width = img.cols;
+            image.height = img.rows;
             XRSLAMPushSensorData(XRSLAM_SENSOR_CAMERA, &image);
             if (has_accelerometer && has_gyroscope) {
                 XRSLAMRunOneFrame();

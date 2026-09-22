@@ -12,6 +12,7 @@
 #include <xrslam/map/frame.h>
 #include <xrslam/map/map.h>
 #include <xrslam/map/track.h>
+#include <xrslam/utility/runtime_budget.h>
 
 namespace xrslam {
 
@@ -19,6 +20,7 @@ FrontendWorker::FrontendWorker(XRSLAM::Detail *detail,
                                std::shared_ptr<Config> config)
     : detail(detail), config(config) {
     initializer = std::make_unique<Initializer>(config);
+    cap_pending_frame_ids_ = config->runtime_max_pending_frame_ids();
 
     latest_state = {{}, nil(), {}, {}};
 }
@@ -37,7 +39,9 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
                                              pending_frame_id);
         }
         if ((sliding_window_tracker = initializer->initialize())) {
-#if defined(XRSLAM_IOS)
+// [pw] 原为 #if defined(XRSLAM_IOS)。与 feature_tracker 的低延迟位姿链是同一件事,
+//      必须同开同关(keymap 不同步的话那边的 PnP 拿不到 landmark)。
+#if defined(XRSLAM_LOWLATENCY_POSE)
             synchronized(detail->feature_tracker->keymap) {
                 detail->feature_tracker->synchronize_keymap(
                     sliding_window_tracker->map.get());
@@ -71,7 +75,8 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
                 detail->feature_tracker->map.get(), pending_frame_id);
         }
         if (sliding_window_tracker->track()) {
-#if defined(XRSLAM_IOS)
+// [pw] 同上:原为 #if defined(XRSLAM_IOS),改挂 XRSLAM_LOWLATENCY_POSE。
+#if defined(XRSLAM_LOWLATENCY_POSE)
             synchronized(detail->feature_tracker->keymap) {
                 detail->feature_tracker->synchronize_keymap(
                     sliding_window_tracker->map.get());
@@ -94,6 +99,18 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
 void FrontendWorker::issue_frame(Frame *frame) {
     auto l = lock();
     pending_frame_ids.push_back(frame->id());
+    {
+        // [pw] 条目 17:后端待处理帧 id 队列。元素只是 size_t(便宜),但后端
+        //      卡住时它会无界增长,而且它的长度就是"后端落后了多少帧"。
+        //      丢最老 = 放弃已经追不上的帧 id;mirror_frame 对找不到的 id 本来
+        //      就有 `frame_index_i == nil() -> return` 的兜底路径。
+        auto &c = runtime::counters();
+        runtime::drop_oldest_over(pending_frame_ids, cap_pending_frame_ids_,
+                                  c.dropped_pending_frame_ids,
+                                  "frontend.pending_frame_ids");
+        c.depth_pending_frame_ids.store(pending_frame_ids.size(),
+                                        std::memory_order_relaxed);
+    }
     resume(l);
 }
 

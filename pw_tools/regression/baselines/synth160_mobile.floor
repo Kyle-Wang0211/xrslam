@@ -1,0 +1,20 @@
+# xrslam-regression noise floor
+_pairs 10
+_runs 5
+aligned_pos_max 0.152770052
+aligned_pos_p95 0.147591781
+first_track_delta 8
+inl_kp_max_abs 1
+lm_max_abs 0
+lm_mean_abs 0
+mapped_lm_max_abs 163
+n_frames_delta 0
+n_tracked_delta 8
+pos_max 0.171215027
+pos_med 0.0157721832
+pos_p95 0.166493355
+rot_max_deg 1.16259369
+rot_p95_deg 1.13485858
+state_mismatch 8
+trk_kp_max_abs 1
+unsettled_delta 6

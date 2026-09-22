@@ -1,0 +1,2 @@
+images,images_rejected,gyro,acc,poses,solve_ms_mean,solve_ms_max,wall_s,imu_zero_frames,degenerate_frames
+2149,0,21500,21500,2007,0.0011751,0.01175,63.3436,0,142

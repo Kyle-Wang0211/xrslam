@@ -227,6 +227,10 @@ struct IMU_Parsac {
     double m_dynamic_probability = 0;
     double m_norm_scale = 1.0;
 
+    // [pw] 取代 make_sample_by_prior 里的全局 rand()。种子取自公开成员 seed
+    //      (声明在类首部,顺序早于本成员)⇒ 每实例独立、可复现、不碰进程全局 RNG。
+    std::mt19937 m_prior_rng{static_cast<unsigned>(seed)};
+
     float ComputeScore(std::vector<std::vector<size_t>> &validBinInliers,
                        std::vector<float> &validBinConfidences) {
 
@@ -416,8 +420,9 @@ struct IMU_Parsac {
                               size_t isample) {
 
         idata = std::min(idata, m_validBinData.size() - 1);
+        // [pw] 原为 rand() % ...(全局 C RNG),改用 per-instance 的 m_prior_rng。
         size_t idx =
-            m_validBinData[idata][rand() % m_validBinData[idata].size()];
+            m_validBinData[idata][m_prior_rng() % m_validBinData[idata].size()];
         std::get<0>(sample)[isample] = std::get<0>(data)[idx];
         std::get<1>(sample)[isample] = std::get<1>(data)[idx];
     }

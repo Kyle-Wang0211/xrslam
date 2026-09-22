@@ -5,6 +5,7 @@ project(xrslam-extra)
 add_compile_options(-fPIC)
 
 include(SuperBuildDepends)
+include(XRSlamHardening)
 superbuild_extern(opencv)
 superbuild_depend(yaml-cpp)
 
@@ -33,6 +34,8 @@ if(TARGET depends::opencv)
       xrslam-extra-common
       depends::opencv
   )
+  # [pw] Blocker 02 第 1 层,理由见 xrslam/CMakeLists.txt。
+  xrslam_hide_internal_symbols(xrslam-extra-opencv-image)
 endif()
 
 if(TARGET depends::yaml-cpp)
@@ -45,6 +48,8 @@ if(TARGET depends::yaml-cpp)
       xrslam-extra-common
       depends::yaml-cpp
   )
+  # [pw] Blocker 02 第 1 层,理由见 xrslam/CMakeLists.txt。
+  xrslam_hide_internal_symbols(xrslam-extra-yaml-config)
 endif()
 
 set(XRSLAM_EXTRA_LIBRARY_DIR ${CMAKE_CURRENT_BINARY_DIR} CACHE INTERNAL "")

@@ -1,5 +1,7 @@
 //#import <thread>
 #import <opencv2/opencv.hpp>
+#include <cstdint>
+#include <vector>
 #import "XRSLAM.h"
 #import "XRSLAM_iOS.h"
 #import "XRGlobalLocalizer.h"
@@ -151,13 +153,15 @@ struct OutputState {
     [self processBuffer:buffer];
 
     {
-        XRSLAMImage image;
+        XRSLAMImage image{}; // [pw] 必须零初始化:width/height 是末尾新增字段
         image.camera_id = 0;
         image.ext = nullptr;
         image.timeStamp = t;
         image.data = cvimage.data;
-        image.stride = cvimage.step[0];
+        image.stride = (int)cvimage.step[0]; // bytes per row
         image.channel = cvimage.channels();
+        image.width = cvimage.cols;
+        image.height = cvimage.rows;
         XRSLAMPushSensorData(XRSLAM_SENSOR_CAMERA, &image);
         XRSLAMRunOneFrame();
 
@@ -239,13 +243,24 @@ struct OutputState {
         Eigen::Vector3f tcw = -Rcw * twc;
         float keypoint_radius = 0.2;
         Eigen::Vector3f group_origin = {0.0, 0.0, 0.0};
-        XRSLAMLandmarks landmarks;
-        XRSLAMGetResult(XRSLAM_RESULT_LANDMARKS, &landmarks);
+        // [pw] caller-allocates 两段式,见 XRSLAM.h 的 XRSLAMGetLandmarks。
+        //      原写法是未初始化的 XRSLAMLandmarks + 库内 new[] + 无人 delete[]。
+        static std::vector<double> lm_xyz(3 * 1024);
+        int32_t lm_n = (int32_t)(lm_xyz.size() / 3);
+        int lm_rc = XRSLAMGetLandmarks(lm_xyz.data(), &lm_n);
+        if (lm_rc == XRSLAM_INCOMPLETE) {
+            int32_t need = 0;
+            XRSLAMGetLandmarks(nullptr, &need);
+            lm_xyz.resize(3 * (size_t)need * 2);
+            lm_n = (int32_t)(lm_xyz.size() / 3);
+            lm_rc = XRSLAMGetLandmarks(lm_xyz.data(), &lm_n);
+        }
+        if (lm_rc < 0) lm_n = 0;
         int near_landmarks = 0;
-        for (int i = 0; i < landmarks.num_landmarks; ++i) {
-            Eigen::Vector3f cur_lk = Eigen::Vector3f(landmarks.landmarks[i].x,
-                                                     landmarks.landmarks[i].y,
-                                                     landmarks.landmarks[i].z);
+        for (int32_t i = 0; i < lm_n; ++i) {
+            Eigen::Vector3f cur_lk = Eigen::Vector3f(lm_xyz[3 * i + 0],
+                                                     lm_xyz[3 * i + 1],
+                                                     lm_xyz[3 * i + 2]);
             Eigen::Vector3f pc = Rcw * cur_lk + tcw;
             pc(0) = pc(0) / pc(2);
             pc(1) = pc(1) / pc(2);

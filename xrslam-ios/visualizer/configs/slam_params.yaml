@@ -17,8 +17,8 @@ sliding_window:
   tracker_frequent: 3
 
 visual_localization:
-  enable: true
-  ip: "10.156.16.69"
+  enable: false   # [pw] 默认关闭远程外发
+  # [pw] 已移除硬编码内网地址(原为明文 HTTP 外发图像)
   port: 12345
 
 parsac:

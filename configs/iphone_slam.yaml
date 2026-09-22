@@ -44,7 +44,8 @@ parsac:
 
 backend:
   backend_flag: true
-  voc_file: Vocabulary/ORBvoc.txt
+  # [pw] 已删除 ORBvoc 配置:该词袋来自 ORB-SLAM(GPLv3 血统),当前树未使用。
+  # 红线:将来任何"从 upstream 拉 backend 分支"的提议,必须当 GPLv3 事件重新评估。
   orb_n_features: 1000
   orb_scale_factor: 1.2
   orb_n_levels: 8

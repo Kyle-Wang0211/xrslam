@@ -11,6 +11,7 @@
 #include <xrslam/map/frame.h>
 #include <xrslam/map/map.h>
 #include <xrslam/map/track.h>
+#include <xrslam/utility/runtime_budget.h>
 #include <xrslam/utility/unique_timer.h>
 namespace xrslam {
 
@@ -19,6 +20,24 @@ FeatureTracker::FeatureTracker(XRSLAM::Detail *detail,
     : detail(detail), config(config) {
     map = std::make_unique<Map>();
     keymap = std::make_unique<Map>();
+    cap_pending_frames_ = config->runtime_max_pending_camera_frames();
+    cap_tracking_map_frames_ = config->runtime_max_tracking_map_frames();
+    // [pw] 条目 17:这条上限是**兜底**,不许悄悄取代既定策略。
+    //   下面那个 while 用的是 max_frames / max_init_frames(基类默认 200 / 60)。
+    //   如果兜底值比它们还小,跟踪图就会被兜底值而不是被设计好的滑窗长度决定 ——
+    //   那是一次静默的行为改变,正是「fail-safe 只许推迟不许丢数据」要挡的东西。
+    //   所以这里把它夹到工作集之上,并且**说出来**,而不是默默照做。
+    const size_t working_set =
+        std::max(config->feature_tracker_max_frames(),
+                 config->feature_tracker_max_init_frames());
+    if (cap_tracking_map_frames_ > 0 &&
+        cap_tracking_map_frames_ <= working_set) {
+        log_warning("[pw][budget] runtime.max_tracking_map_frames=%zu 不大于"
+                    "跟踪图的正常工作集 %zu(max_frames / max_init_frames),"
+                    "已上调为 %zu。兜底上限不得取代既定滑窗策略。",
+                    cap_tracking_map_frames_, working_set, working_set + 8);
+        cap_tracking_map_frames_ = working_set + 8;
+    }
 }
 
 FeatureTracker::~FeatureTracker() = default;
@@ -36,6 +55,17 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
 
     std::unique_ptr<Frame> frame = std::move(frames.front());
     frames.pop_front();
+    {
+        auto &c = runtime::counters();
+        runtime::observe_depth(c.depth_tracker_frame_queue,
+                               c.hw_tracker_frame_queue, frames.size());
+    }
+    // [pw] 任务 3:**必须在这里**取真实 IMU 样本数。再往下 40 行有一段
+    //      `frame->preintegration.data.insert(begin(), imu)` 的补桩逻辑:当本帧
+    //      一个真实样本都没有时,它会塞进一个"上一帧最后一个样本 + 改时间戳"的
+    //      合成样本 ⇒ 之后再数就永远数不到 0,「静默退化成纯单目」这个信号会被
+    //      补桩自己抹掉。raw = 补桩前的真实观测数。
+    const size_t n_imu_raw = frame->preintegration.data.size();
     l.unlock();
 
     frame->image->preprocess(config->feature_tracker_clahe_clip_limit(),
@@ -94,7 +124,10 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
             last_frame->track_keypoints(frame.get(), config.get());
             if (is_initialized) {
                 frame->preintegration.predict(last_frame, frame.get());
-#if defined(XRSLAM_IOS)
+// [pw] 原为 #if defined(XRSLAM_IOS)。这条是「每帧 keymap PnP + 更新 latest_state」的
+//      低延迟位姿链,是产品行为选择,不是平台判定。以前只有 iOS 编得进来,Android 走
+//      下面的 #else 分支 ⇒ 两端位姿输出率与精度来源完全不同。改挂 XRSLAM_LOWLATENCY_POSE。
+#if defined(XRSLAM_LOWLATENCY_POSE)
                 synchronized(keymap) {
                     attach_latest_frame(frame.get());
                     solve_pnp();
@@ -135,9 +168,72 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
             frame->detect_keypoints(config.get());
         map->attach_frame(std::move(frame));
 
+        {
+            // [pw] 任务 3:发布「这一帧到底有没有用上 IMU」。
+            //      imu_samples == 0 就是静默退化成纯单目的信号 —— 这一帧的
+            //      预积分里一个惯性样本都没有。
+            Frame *attached = map->get_frame(map->frame_num() - 1);
+            auto &h = runtime::frame_health_atomics();
+            const int n_imu_integrated =
+                (int)attached->preintegration.data.size();
+            h.frame_t.store(attached->image->t, std::memory_order_relaxed);
+            h.imu_samples.store((int)n_imu_raw, std::memory_order_relaxed);
+            h.imu_samples_integrated.store(n_imu_integrated,
+                                           std::memory_order_relaxed);
+            h.detected.store((int)attached->keypoint_num(),
+                             std::memory_order_relaxed);
+            if (n_imu_raw == 0) {
+                unsigned long long starved = h.imu_starved_frames.fetch_add(
+                                                 1, std::memory_order_relaxed) +
+                                             1;
+                if (runtime::should_log_at(starved)) {
+                    log_warning("[pw][health] 本帧(t=%.6f)没有任何真实 IMU "
+                                "样本参与预积分(积分用样本数=%d,其中 %d 个是"
+                                "补桩合成的)⇒ 已静默退化成纯单目,累计 %llu 帧",
+                                attached->image->t, n_imu_integrated,
+                                n_imu_integrated, starved);
+                }
+            }
+            h.seq.fetch_add(1, std::memory_order_relaxed);
+        }
+
         size_t max_frame_num = is_initialized? config->feature_tracker_max_frames(): config->feature_tracker_max_init_frames();
         while (map->frame_num() > max_frame_num && map->get_frame(0)->id() < latest_optimized_frame_id) {
             map->erase_frame(0);
+        }
+
+        // [pw] 条目 17:上面那个 while 的第二个条件依赖后端在推进
+        //      latest_optimized_frame_id。后端一旦卡住(热降频)或丢跟踪,
+        //      这张跟踪图就**一帧都不裁**了 —— 每帧带着关键点和 track,
+        //      是 native 匿名内存里增长最快的一块。这里加一条不依赖后端的
+        //      绝对上限,策略同样是丢最老。裁掉的只是跟踪器的内部工作集,
+        //      交付数据(采集到的图像本身)不在这条链上。
+        if (cap_tracking_map_frames_ > 0) {
+            size_t dropped = 0;
+            while (map->frame_num() > cap_tracking_map_frames_) {
+                map->erase_frame(0);
+                ++dropped;
+            }
+            if (dropped > 0) {
+                auto &c = runtime::counters();
+                unsigned long long total =
+                    c.dropped_tracking_map_frames.fetch_add(
+                        dropped, std::memory_order_relaxed) +
+                    dropped;
+                if (runtime::should_log_at(total)) {
+                    log_warning("[pw][budget] 跟踪图超过绝对上限 %zu 帧"
+                                "(后端未推进 latest_optimized_frame_id),"
+                                "丢弃最老 %zu 帧,累计 %llu",
+                                cap_tracking_map_frames_, dropped, total);
+                }
+            }
+        }
+        {
+            auto &c = runtime::counters();
+            runtime::observe_depth(c.depth_tracking_map_frames,
+                                   c.hw_tracking_map_frames, map->frame_num());
+            c.depth_tracking_map_tracks.store(map->track_num(),
+                                              std::memory_order_relaxed);
         }
 
         inspect_debug(feature_tracker_painter, p) {
@@ -161,6 +257,17 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
 void FeatureTracker::track_frame(std::unique_ptr<Frame> frame) {
     auto l = lock();
     frames.emplace_back(std::move(frame));
+    {
+        // [pw] 条目 17:跟踪器的输入队列。热降频时跟踪线程跟不上就会在这里堆
+        //      整张图 —— 与 detail.frames 同一类交付敏感对象,所以复用同一个
+        //      上限旋钮,默认 0(不设限,行为与改动前一致),只观测 + 告警。
+        auto &c = runtime::counters();
+        runtime::drop_oldest_over(frames, cap_pending_frames_,
+                                  c.dropped_tracker_frame_queue,
+                                  "feature_tracker.frames(跟踪输入队列)");
+        runtime::observe_depth(c.depth_tracker_frame_queue,
+                               c.hw_tracker_frame_queue, frames.size());
+    }
     resume(l);
 }
 
@@ -317,6 +424,34 @@ void FeatureTracker::solve_pnp() {
     if (factor_count >= 6) {
         solver->solve();
     }
+}
+
+// ---------------------------------------------------------------------------
+// [pw] 任务 3:配合 C API 层健康状态机的只读出口。核内定义,消费方前向声明。
+// ---------------------------------------------------------------------------
+void get_frame_health(FrameHealth &out) {
+    auto &h = runtime::frame_health_atomics();
+    const std::memory_order r = std::memory_order_relaxed;
+    out.frame_seq = h.seq.load(r);
+    out.frame_t = h.frame_t.load(r);
+    out.imu_samples = h.imu_samples.load(r);
+    out.imu_samples_integrated = h.imu_samples_integrated.load(r);
+    out.detected_keypoints = h.detected.load(r);
+    out.tracked_keypoints = h.tracked.load(r);
+    out.inlier_keypoints = h.inliers.load(r);
+    out.mapped_landmarks = h.mapped_landmarks.load(r);
+    out.imu_starved_frames = h.imu_starved_frames.load(r);
+}
+
+void get_frame_health_counters(int &imu_samples, int &tracked_keypoints,
+                               int &inlier_keypoints,
+                               int &detected_keypoints) {
+    auto &h = runtime::frame_health_atomics();
+    const std::memory_order r = std::memory_order_relaxed;
+    imu_samples = h.imu_samples.load(r);
+    tracked_keypoints = h.tracked.load(r);
+    inlier_keypoints = h.inliers.load(r);
+    detected_keypoints = h.detected.load(r);
 }
 
 } // namespace xrslam

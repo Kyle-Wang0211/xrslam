@@ -5,6 +5,7 @@
 #include <xrslam/map/map.h>
 #include <xrslam/map/track.h>
 #include <xrslam/utility/poisson_disk_filter.h>
+#include <xrslam/utility/runtime_budget.h>
 
 namespace xrslam {
 
@@ -108,6 +109,14 @@ void Frame::track_keypoints(Frame *next_frame, Config *config) {
 
     matrix<3> E =
         find_essential_matrix(curr_keypoints_h, next_keypoints_h, mask, 1.0);
+    // [pw] 任务 3:必须**在这里**数本质矩阵的内点。下面 find_rotation_matrix
+    //      拿的是同一个 mask 的非 const 引用,会把它整个覆盖成**旋转模型**的
+    //      内点掩码 -- 在那之后再数就不是"通过几何校验的观测数"了。
+    int n_essential_inliers = 0;
+    for (size_t im = 0; im < mask.size(); ++im) {
+        if (mask[im])
+            ++n_essential_inliers;
+    }
     for (size_t i = 0; i < status.size(); ++i) {
         if (!mask[i]) {
             status[i] = 0;
@@ -163,6 +172,13 @@ void Frame::track_keypoints(Frame *next_frame, Config *config) {
         }
     }
 
+    // [pw] 任务 3:发布本帧的 tracked / inlier 计数。
+    //   inlier  = **本质矩阵** RANSAC 的内点(在 mask 被旋转模型覆盖之前就已
+    //             数好,见上面 n_essential_inliers),纯几何校验结果;
+    //   tracked = 最终真正传递到下一帧的关键点数(LK 存活 ∩ 本质矩阵内点
+    //             ∩ 泊松盘保留 ∩ 非 TT_TRASH),下一帧实际能用的观测数。
+    int n_tracked = 0;
+
     for (size_t curr_keypoint_index = 0;
          curr_keypoint_index < curr_keypoints.size(); ++curr_keypoint_index) {
         if (status[curr_keypoint_index]) {
@@ -170,8 +186,13 @@ void Frame::track_keypoints(Frame *next_frame, Config *config) {
             next_frame->append_keypoint(next_bearings[curr_keypoint_index]);
             get_track(curr_keypoint_index, nullptr)
                 ->add_keypoint(next_frame, next_keypoint_index);
+            ++n_tracked;
         }
     }
+
+    auto &h = runtime::frame_health_atomics();
+    h.tracked.store(n_tracked, std::memory_order_relaxed);
+    h.inliers.store(n_essential_inliers, std::memory_order_relaxed);
 }
 
 PoseState Frame::get_pose(const ExtrinsicParams &sensor) const {

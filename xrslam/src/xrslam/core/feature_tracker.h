@@ -38,6 +38,10 @@ class FeatureTracker : public Worker {
     std::shared_ptr<Config> config;
     std::optional<std::tuple<double, PoseState, MotionState>> latest_state;
     mutable std::mutex latest_pose_mutex;
+
+    // [pw] 条目 17:构造时缓存的硬上限(见 Config::runtime_max_*)。
+    size_t cap_pending_frames_ = 0;
+    size_t cap_tracking_map_frames_ = 0;
 };
 
 } // namespace xrslam

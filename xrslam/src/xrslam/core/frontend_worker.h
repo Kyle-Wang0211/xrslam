@@ -41,6 +41,8 @@ class FrontendWorker : public Worker {
 
   private:
     std::deque<size_t> pending_frame_ids;
+    // [pw] 条目 17:构造时缓存的硬上限。
+    size_t cap_pending_frame_ids_ = 0;
 
     XRSLAM::Detail *detail;
     std::shared_ptr<Config> config;

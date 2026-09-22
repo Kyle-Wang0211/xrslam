@@ -28,11 +28,22 @@ void XRGlobalLocalizerManager::QueryLocalization(XRSLAMImage *image,
         return;
     std::shared_ptr<xrslam::extra::OpenCvImage> opencv_image =
         std::make_shared<xrslam::extra::OpenCvImage>();
-    int cols = config_->camera_resolution()[0];
-    int rows = config_->camera_resolution()[1];
+    // [pw] 与 XRSLAMManager::PushImage 同一个洞:尺寸取自 yaml 而不是图像本身,
+    //      调用方的图比 yaml 矮就直接读过缓冲区尾部。优先用声明尺寸,0 才回退 yaml。
+    if (!image || !image->data) return;
+    if (image->channel != 0 && image->channel != 1) {
+        // 本函数只会把数据当单通道灰度解释,给多通道图会按错误的元素大小读。
+        return;
+    }
+    int cols = (image->width  > 0) ? image->width  : (int)config_->camera_resolution()[0];
+    int rows = (image->height > 0) ? image->height : (int)config_->camera_resolution()[1];
+    if (cols <= 0 || rows <= 0) return;
+    long long stride = (long long)image->stride;
+    if (stride == 0) stride = cols;      // cv::Mat::AUTO_STEP,紧密打包
+    if (stride < (long long)cols) return; // 否则 OpenCV 5 会在 Mat 构造里抛异常
     opencv_image->t = image->timeStamp;
     cv::Mat img = cv::Mat(rows, cols, CV_8UC1, image->data,
-                          image->stride); // gray img
+                          (size_t)stride); // gray img
     opencv_image->image = img.clone();
     opencv_image->raw = img.clone();
     Pose image_pose;

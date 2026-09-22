@@ -112,6 +112,19 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
     m_solver_iteration_limit = Config::solver_iteration_limit();
     m_solver_time_limit = Config::solver_time_limit();
 
+    // [pw] 条目 17 / 条目 08:先取基类默认,再让 yaml 可选覆盖。
+    m_runtime_max_raw_imu_queue = Config::runtime_max_raw_imu_queue();
+    m_runtime_max_pending_imu = Config::runtime_max_pending_imu();
+    m_runtime_max_frontal_imu = Config::runtime_max_frontal_imu();
+    m_runtime_max_pending_camera_frames =
+        Config::runtime_max_pending_camera_frames();
+    m_runtime_max_tracking_map_frames =
+        Config::runtime_max_tracking_map_frames();
+    m_runtime_max_pending_frame_ids = Config::runtime_max_pending_frame_ids();
+    m_imu_timing_warmup_samples = Config::imu_timing_warmup_samples();
+    m_imu_timing_window_samples = Config::imu_timing_window_samples();
+    m_imu_timing_batch_gap_ratio = Config::imu_timing_batch_gap_ratio();
+
     m_parsac_flag = Config::parsac_flag();
     m_parsac_dynamic_probability = Config::parsac_dynamic_probability();
     m_parsac_threshold = Config::parsac_threshold();
@@ -134,7 +147,10 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
     YAML::Node slam_config;
     YAML::Node device_config;
     try {
-#if defined(XRSLAM_IOS)
+// [pw] 原为 #if defined(XRSLAM_IOS)。这决定 XRSLAMCreate 的 slam_config_path 参数
+//      到底是 YAML 正文还是文件路径 —— 纯 API 契约,和「是不是 iOS」无关。
+//      挂在 XRSLAM_IOS 上会让同一个 C ABI 在 iOS 和 Android 上语义不同。
+#if defined(XRSLAM_CONFIG_FROM_STRING)
         slam_config = YAML::Load(slam_config_filename);
 #else
         slam_config = YAML::LoadFile(slam_config_filename);
@@ -145,7 +161,8 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
         throw LoadException(slam_config_filename);
     }
     try {
-#if defined(XRSLAM_IOS)
+// [pw] 同上:原为 #if defined(XRSLAM_IOS),改挂 XRSLAM_CONFIG_FROM_STRING。
+#if defined(XRSLAM_CONFIG_FROM_STRING)
         device_config = YAML::Load(device_config_filename);
 #else
         device_config = YAML::LoadFile(device_config_filename);
@@ -224,6 +241,45 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
 
     if (auto node = find_node(slam_config, "output.p_bo", false)) {
         assign_vector(m_output_to_body_translation, node);
+    }
+
+    if (auto node = find_node(slam_config, "runtime.max_raw_imu_queue", false)) {
+        assign(m_runtime_max_raw_imu_queue, node);
+    }
+
+    if (auto node = find_node(slam_config, "runtime.max_pending_imu", false)) {
+        assign(m_runtime_max_pending_imu, node);
+    }
+
+    if (auto node = find_node(slam_config, "runtime.max_frontal_imu", false)) {
+        assign(m_runtime_max_frontal_imu, node);
+    }
+
+    if (auto node =
+            find_node(slam_config, "runtime.max_pending_camera_frames", false)) {
+        assign(m_runtime_max_pending_camera_frames, node);
+    }
+
+    if (auto node =
+            find_node(slam_config, "runtime.max_tracking_map_frames", false)) {
+        assign(m_runtime_max_tracking_map_frames, node);
+    }
+
+    if (auto node =
+            find_node(slam_config, "runtime.max_pending_frame_ids", false)) {
+        assign(m_runtime_max_pending_frame_ids, node);
+    }
+
+    if (auto node = find_node(slam_config, "imu_timing.warmup_samples", false)) {
+        assign(m_imu_timing_warmup_samples, node);
+    }
+
+    if (auto node = find_node(slam_config, "imu_timing.window_samples", false)) {
+        assign(m_imu_timing_window_samples, node);
+    }
+
+    if (auto node = find_node(slam_config, "imu_timing.batch_gap_ratio", false)) {
+        assign(m_imu_timing_batch_gap_ratio, node);
     }
 
     if (auto node = find_node(slam_config, "sliding_window.size", false)) {
@@ -411,6 +467,42 @@ quaternion YamlConfig::imu_to_body_rotation() const {
 
 vector<3> YamlConfig::imu_to_body_translation() const {
     return m_imu_to_body_translation;
+}
+
+size_t YamlConfig::runtime_max_raw_imu_queue() const {
+    return m_runtime_max_raw_imu_queue;
+}
+
+size_t YamlConfig::runtime_max_pending_imu() const {
+    return m_runtime_max_pending_imu;
+}
+
+size_t YamlConfig::runtime_max_frontal_imu() const {
+    return m_runtime_max_frontal_imu;
+}
+
+size_t YamlConfig::runtime_max_pending_camera_frames() const {
+    return m_runtime_max_pending_camera_frames;
+}
+
+size_t YamlConfig::runtime_max_tracking_map_frames() const {
+    return m_runtime_max_tracking_map_frames;
+}
+
+size_t YamlConfig::runtime_max_pending_frame_ids() const {
+    return m_runtime_max_pending_frame_ids;
+}
+
+size_t YamlConfig::imu_timing_warmup_samples() const {
+    return m_imu_timing_warmup_samples;
+}
+
+size_t YamlConfig::imu_timing_window_samples() const {
+    return m_imu_timing_window_samples;
+}
+
+double YamlConfig::imu_timing_batch_gap_ratio() const {
+    return m_imu_timing_batch_gap_ratio;
 }
 
 matrix<2> YamlConfig::keypoint_noise_cov() const {

@@ -3,7 +3,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
 project(xrslam-localization)
 
 include(SuperBuildDepends)
-include_directories(${CMAKE_SOURCE_DIR}/xrslam-interface/include)
+# [pw] CMAKE_SOURCE_DIR -> XRSLAM_ROOT_DIR(根 CMakeLists 里定义)。前者在本仓被
+#      add_subdirectory/FetchContent 嵌入时指向外层工程根。这里也不能用 PROJECT_SOURCE_DIR:
+#      本文件第 3 行自己调了 project(xrslam-localization),它等于本目录。
+include_directories(${XRSLAM_ROOT_DIR}/xrslam-interface/include)
 
 set(XRSLAM_LOCALIZATION_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(XRSLAM_LOCALIZATION_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)

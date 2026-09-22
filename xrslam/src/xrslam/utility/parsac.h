@@ -8,10 +8,12 @@
 namespace xrslam {
 
 struct Sampler {
+    // [pw] 原来构造函数里调 srand(0)。srand 改的是**整个进程**的 C 运行时随机状态,
+    //      而本库在 iOS/Android 上是打进宿主 App 的 —— 库不该踩宿主的全局 RNG,
+    //      而且这里每构造一次 Sampler 就踩一次。确定性改由 per-instance 的 mt19937
+    //      (固定种子 0)提供,与原来 srand(0) 的意图一致但没有进程级外溢。
     Sampler(std::vector<float> &confidencesAccumulated)
-        : m_confidencesAccumulated(confidencesAccumulated) {
-        srand(0);
-    };
+        : m_confidencesAccumulated(confidencesAccumulated), m_rng(0u) {};
 
     bool is_sampled(size_t &idx) {
         if (m_sampled_bin_index.size() == 0)
@@ -30,7 +32,8 @@ struct Sampler {
         const size_t nBins = m_confidencesAccumulated.size() - 1;
         do {
             cnt++;
-            const float r = rand() / (float)RAND_MAX;
+            // [pw] 原为 rand() / (float)RAND_MAX(全局 C RNG),改用 per-instance 引擎。
+            const float r = std::generate_canonical<float, 24>(m_rng);
             auto it = std::upper_bound(m_confidencesAccumulated.begin() + 1,
                                        m_confidencesAccumulated.end(), r);
             if (it == m_confidencesAccumulated.end())
@@ -54,6 +57,8 @@ struct Sampler {
   private:
     std::vector<float> &m_confidencesAccumulated;
     std::vector<size_t> m_sampled_bin_index;
+    // [pw] 取代原来的全局 srand/rand。
+    std::mt19937 m_rng;
 };
 
 template <size_t ModelDoF, typename ModelType, typename ModelSolver,
@@ -196,6 +201,11 @@ struct Parsac {
     float m_BinWidth;
 
     double m_norm_scale = 1.0;
+
+    // [pw] 取代 make_sample_by_prior 里的全局 rand()。种子取自公开成员 seed
+    //      (声明顺序在本成员之前,默认成员初始化器安全)⇒ 每实例独立、可复现、
+    //      不碰进程全局 RNG 状态。
+    std::mt19937 m_prior_rng{static_cast<unsigned>(seed)};
 
     float ComputeScore(std::vector<std::vector<size_t>> &validBinInliers,
                        std::vector<float> &validBinConfidences) {
@@ -380,8 +390,9 @@ struct Parsac {
                               size_t isample) {
 
         idata = std::min(idata, m_validBinData.size() - 1);
+        // [pw] 原为 rand() % ...(全局 C RNG),改用 per-instance 的 m_prior_rng。
         size_t idx =
-            m_validBinData[idata][rand() % m_validBinData[idata].size()];
+            m_validBinData[idata][m_prior_rng() % m_validBinData[idata].size()];
         std::get<0>(sample)[isample] = std::get<0>(data)[idx];
         std::get<1>(sample)[isample] = std::get<1>(data)[idx];
     }
