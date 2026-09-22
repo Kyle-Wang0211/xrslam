@@ -18,6 +18,9 @@ size_t Config::sliding_window_size() const { return 10; }
 size_t Config::sliding_window_subframe_size() const { return 3; }
 
 size_t Config::sliding_window_force_keyframe_landmarks() const { return 35; }
+double Config::sliding_window_rpe_threshold_px() const { return 3.0; }
+// 0 = keep the bare pixel threshold, i.e. upstream's behaviour byte for byte.
+double Config::sliding_window_rpe_reference_focal() const { return 0.0; }
 
 double Config::feature_tracker_min_keypoint_distance() const { return 20.0; }
 
@@ -140,6 +143,10 @@ void Config::log_config() const {
 
     ss << "Config::sliding_window_force_keyframe_landmarks: "
        << sliding_window_force_keyframe_landmarks() << std::endl;
+    ss << "Config::sliding_window_rpe_threshold_px: "
+       << sliding_window_rpe_threshold_px() << std::endl;
+    ss << "Config::sliding_window_rpe_reference_focal: "
+       << sliding_window_rpe_reference_focal() << std::endl;
 
     ss << "Config::sliding_window_tracker_frequent: "
        << sliding_window_tracker_frequent() << std::endl;

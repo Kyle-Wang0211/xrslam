@@ -1,4 +1,5 @@
 #include <xrslam/common.h>
+#include "../utility/pw_trace.h"
 #include <xrslam/core/detail.h>
 #include <xrslam/core/feature_tracker.h>
 #include <xrslam/core/frontend_worker.h>
@@ -22,6 +23,7 @@ FeatureTracker::FeatureTracker(XRSLAM::Detail *detail,
 FeatureTracker::~FeatureTracker() = default;
 
 void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
+    PW_ZONE("frontend.work");
     auto ft_timer = make_timer([](double t) {
         inspect(feature_tracker_time, time) {
             static double avg_time = 0;
@@ -38,9 +40,12 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
     notify_space(); // 腾出一个槽位,放行可能卡在闸口上的生产者
     l.unlock();
 
+    {
+    PW_ZONE("frontend.preprocess_call");
     frame->image->preprocess(config->feature_tracker_clahe_clip_limit(),
                              config->feature_tracker_clahe_width(),
                              config->feature_tracker_clahe_height());
+    }
 
     auto [latest_optimized_time, latest_optimized_frame_id,
           latest_optimized_pose, latest_optimized_motion] =
@@ -50,6 +55,9 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
         !is_initialized ||
         frame->id() % config->sliding_window_tracker_frequent() == 0;
     synchronized(map) {
+        // Scoped inside the lock, not at function scope: PW_ZONE is RAII, and at
+        // function scope it would have swallowed every stage after it.
+        PW_ZONE("frontend.map_sync_and_preintegrate");
         if (map->frame_num() > 0) {
             if (is_initialized) {
                 size_t latest_optimized_frame_index =
@@ -91,7 +99,10 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
             frame->preintegration.integrate(
                 frame->image->t, last_frame->motion.bg, last_frame->motion.ba,
                 false, false);
-            last_frame->track_keypoints(frame.get(), config.get());
+            {
+                PW_ZONE("frontend.track_call");
+                last_frame->track_keypoints(frame.get(), config.get());
+            }
             if (is_initialized) {
                 frame->preintegration.predict(last_frame, frame.get());
 #if defined(XRSLAM_IOS)
@@ -127,8 +138,10 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
             last_frame->image->release_image_buffer();
         }
 
-        if (slidind_window_frame_tag)
+        if (slidind_window_frame_tag) {
+            PW_ZONE("frontend.detect_call");
             frame->detect_keypoints(config.get());
+        }
         map->attach_frame(std::move(frame));
 
         size_t max_frame_num = is_initialized? config->feature_tracker_max_frames(): config->feature_tracker_max_init_frames();
@@ -150,8 +163,10 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
             }
         }
     }
-    if (slidind_window_frame_tag)
+    if (slidind_window_frame_tag) {
+        PW_ZONE("frontend.issue_frame_to_backend");
         detail->frontend->issue_frame(map->get_frame(map->frame_num() - 1));
+    }
 }
 
 void FeatureTracker::track_frame(std::unique_ptr<Frame> frame) {

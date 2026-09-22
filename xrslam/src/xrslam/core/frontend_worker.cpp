@@ -1,4 +1,6 @@
+#include <chrono>
 #include <iostream>
+#include "../utility/pw_trace.h"
 #include <xrslam/common.h>
 #include <xrslam/core/detail.h>
 #include <xrslam/core/feature_tracker.h>
@@ -10,6 +12,43 @@
 #include <xrslam/map/frame.h>
 #include <xrslam/map/map.h>
 #include <xrslam/map/track.h>
+
+// [PW 2026-09-16] 后端记账。XRSLAM 自带的计时通道只有 feature_tracker_time
+// (feature_tracker.cpp:25),包住整个前端;后端一处都没有。而 1920×1440 的整帧
+// 预算 51.67 ms 里前端只占 20.22 ms(39%),剩下 61% 究竟是后端滑窗优化还是台架
+// 回放 I/O,没有这组计数就分不开——而那正是决定下一刀砍哪里的数。
+// 主机侧计时:这几段都是粗粒度调用(每帧一次),不是常量偏移紧循环,所以不适用
+// 「加法式探针会被 CSE 吃掉或被去优化」那条教训。
+extern "C" {
+double pw_bk_work_ms = 0.0;
+double pw_bk_init_ms = 0.0;
+double pw_bk_mirror_ms = 0.0;
+double pw_bk_track_ms = 0.0;
+unsigned long long pw_bk_work_n = 0;
+unsigned long long pw_bk_init_n = 0;
+unsigned long long pw_bk_track_n = 0;
+}
+
+namespace {
+inline double pw_now_ms() {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+// RAII 而不是在函数尾部加一行:work() 里有多条分支,只有作用域退出才保证每个
+// 出口都记上。
+struct PwScope {
+    double t0;
+    double *acc;
+    unsigned long long *n;
+    explicit PwScope(double *a, unsigned long long *c = nullptr)
+        : t0(pw_now_ms()), acc(a), n(c) {}
+    ~PwScope() {
+        *acc += pw_now_ms() - t0;
+        if (n) ++*n;
+    }
+};
+} // namespace
 
 namespace xrslam {
 
@@ -26,7 +65,11 @@ FrontendWorker::~FrontendWorker() = default;
 bool FrontendWorker::empty() const { return pending_frame_ids.empty(); }
 
 void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
+    PW_ZONE("backend.work");
+    PwScope pw_work(&pw_bk_work_ms, &pw_bk_work_n);
     if (initializer) {
+        PW_ZONE("backend.initializer");
+        PwScope pw_init(&pw_bk_init_ms, &pw_bk_init_n);
         size_t pending_frame_id = pending_frame_ids.front();
         pending_frame_ids.clear();
         notify_space();
@@ -63,11 +106,21 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
         pending_count_.store(pending_frame_ids.size(), std::memory_order_relaxed);
         notify_space();
         l.unlock();
-        synchronized(detail->feature_tracker->map) {
-            sliding_window_tracker->mirror_frame(
-                detail->feature_tracker->map.get(), pending_frame_id);
+        {
+            PW_ZONE("backend.mirror_frame");
+            PwScope pw_mirror(&pw_bk_mirror_ms);
+            synchronized(detail->feature_tracker->map) {
+                sliding_window_tracker->mirror_frame(
+                    detail->feature_tracker->map.get(), pending_frame_id);
+            }
         }
-        if (sliding_window_tracker->track()) {
+        bool pw_tracked;
+        {
+            PW_ZONE("backend.sliding_window_track");
+            PwScope pw_track(&pw_bk_track_ms, &pw_bk_track_n);
+            pw_tracked = sliding_window_tracker->track();
+        }
+        if (pw_tracked) {
 #if defined(XRSLAM_IOS)
             synchronized(detail->feature_tracker->keymap) {
                 detail->feature_tracker->synchronize_keymap(

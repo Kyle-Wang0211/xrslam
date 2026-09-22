@@ -54,6 +54,8 @@ class YamlConfig : public Config {
     size_t sliding_window_subframe_size() const override;
     size_t sliding_window_tracker_frequent() const override;
     size_t sliding_window_force_keyframe_landmarks() const override;
+    double sliding_window_rpe_threshold_px() const override;
+    double sliding_window_rpe_reference_focal() const override;
 
     double feature_tracker_min_keypoint_distance() const override;
     size_t feature_tracker_max_keypoint_detection() const override;
@@ -111,6 +113,8 @@ class YamlConfig : public Config {
     size_t m_sliding_window_subframe_size;
     size_t m_sliding_window_tracker_frequent;
     size_t m_sliding_window_force_keyframe_landmarks;
+    double m_sliding_window_rpe_threshold_px;
+    double m_sliding_window_rpe_reference_focal;
 
     double m_feature_tracker_min_keypoint_distance;
     size_t m_feature_tracker_max_keypoint_detection;

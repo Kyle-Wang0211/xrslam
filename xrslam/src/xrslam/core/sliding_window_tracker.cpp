@@ -1,3 +1,4 @@
+#include <atomic>
 #include <xrslam/common.h>
 #include <xrslam/core/detail.h>
 #include <xrslam/core/feature_tracker.h>
@@ -14,6 +15,76 @@
 #include <xrslam/utility/unique_timer.h>
 
 namespace xrslam {
+
+// [bench 2026-09-17] Read-only telemetry for "should this frame be trusted".
+//
+// Two quantities the sliding window already computes are dropped on the floor:
+//
+//   * `Solver::solve()` returns `solver_summary.IsSolutionUsable()` (solver.cpp:189) and all four
+//     call sites here ignore it. `initializer.cpp:444` is the only place in the tree that reads it.
+//   * the per-track mean reprojection error, computed twice (once to gate TT_VALID, once in
+//     check_frames_rpe), is compared against a bare 3.0 px and then discarded. TT_VALID is read in
+//     20 places and already decides which tracks reach the solver and the marginalisation, so the
+//     quantity behind it is load-bearing but invisible.
+//
+// Nothing new is computed here and no decision changes: every increment sits beside an existing
+// statement, and the rpe sums are the same doubles the gate already formed. Sums are kept in
+// milli-pixels so the accumulator can be a plain integer atomic.
+enum PwSolverCounter {
+    kPwSolveCalls = 0,      // solve() invocations inside SlidingWindowTracker
+    kPwSolveUnusable,       // ... of which Ceres reported !IsSolutionUsable()
+    kPwTrackEvaluated,      // triangulated tracks passing through the TT_VALID gate
+    kPwTrackRejectDepth,    // ... rejected by the y.z() <= 1e-3 || > 50 window
+    kPwTrackRejectRpe,      // ... rejected by mean rpe >= 3.0 px
+    kPwTrackRpeSamples,     // tracks that contributed a finite mean rpe
+    kPwTrackRpeMilliPx,     // sum of those means, in milli-pixels
+    kPwFramesRpeCalls,      // check_frames_rpe() invocations
+    kPwFramesRpeReject,     // ... that returned false
+    kPwFramesRpeSamples,
+    kPwFramesRpeMilliPx,
+    kPwSolverCounterCount
+};
+std::atomic<uint64_t> pw_solver_counters[kPwSolverCounterCount] = {};
+
+namespace {
+// The gate the two sites share, kept in one place so the telemetry cannot drift from it.
+inline void pw_account_rpe(double rpe, double rpe_count, bool depth_ok, bool rpe_ok,
+                           int samples_slot, int millipx_slot) {
+    if (!depth_ok || rpe_count <= 0.0)
+        return;
+    ++pw_solver_counters[samples_slot];
+    pw_solver_counters[millipx_slot] +=
+        (uint64_t)(rpe / std::max(rpe_count, 1.0) * 1000.0);
+    (void)rpe_ok;
+}
+} // namespace
+
+// [bench 2026-09-17] The TT_VALID reprojection gate, in one place.
+//
+// `rpe` is in REAL pixels: both call sites take the norm after apply_k(), so the number carries the
+// camera's own focal length. A bare pixel threshold therefore only means the same thing on the
+// camera it was authored for. Upstream only ever ran 640x480 iPhone calibrations (fx ~= 449-525)
+// and EuRoC (fx = 458.65), where a bare 3.0 is self-consistent; at our 1920x1440 target
+// (COLMAP self-calibrated fx = 1376.65) the same angle spans three times as many pixels.
+//
+// The scaling convention is this codebase's own: `initializer.cpp:203` already divides a threshold
+// by K(0,0) before handing it to RANSAC. The external statement of the same rule is VINS-Mono
+// issue #48 (qintonguav, first author, 2017-07-14): "we tolerate 3-pixel noise under 460 focal
+// lengths. If you change to 920, the tolerate pixel will be 6 pixels". RTAB-Map implements exactly
+// this recovery for VINS in OdometryVINSFusion.cpp:175-183 (BSD-3).
+//
+// Default reference_focal <= 0 keeps the bare threshold, so an unconfigured build is upstream's
+// behaviour byte for byte. That default is what makes this change measurable rather than assumed:
+// the same binary runs both arms.
+// `fx` is the mean focal length of the very frames that contributed to `rpe`, accumulated in
+// the same loop -- the threshold has to be averaged over the same set the error was.
+inline double pw_rpe_threshold(const Config *config, double fx) {
+    const double px = config->sliding_window_rpe_threshold_px();
+    const double ref = config->sliding_window_rpe_reference_focal();
+    if (!(ref > 0.0))
+        return px;
+    return px * fx / ref;
+}
 
 SlidingWindowTracker::SlidingWindowTracker(std::unique_ptr<Map> keyframe_map,
                                            std::shared_ptr<Config> config)
@@ -139,7 +210,9 @@ void SlidingWindowTracker::localize_newframe() {
         }
     }
 
-    solver->solve();
+    ++pw_solver_counters[kPwSolveCalls];
+    if (!solver->solve())
+        ++pw_solver_counters[kPwSolveUnusable];
 }
 
 bool SlidingWindowTracker::manage_keyframe() {
@@ -320,7 +393,9 @@ void SlidingWindowTracker::refine_window() {
         }
     }
 
-    solver->solve();
+    ++pw_solver_counters[kPwSolveCalls];
+    if (!solver->solve())
+        ++pw_solver_counters[kPwSolveUnusable];
 
     for (size_t k = 0; k < map->track_num(); ++k) {
         Track *track = map->get_track(k);
@@ -329,6 +404,7 @@ void SlidingWindowTracker::refine_window() {
             auto x = track->get_landmark_point();
             double rpe = 0.0;
             double rpe_count = 0.0;
+            double rpe_fx = 0.0;
             for (const auto &[frame, keypoint_index] : track->keypoint_map()) {
                 if (!frame->tag(FT_KEYFRAME))
                     continue;
@@ -342,8 +418,18 @@ void SlidingWindowTracker::refine_window() {
                         apply_k(frame->get_keypoint(keypoint_index), frame->K))
                            .norm();
                 rpe_count += 1.0;
+                rpe_fx += frame->K(0, 0);
             }
-            is_valid = is_valid && (rpe / std::max(rpe_count, 1.0) < 3.0);
+            const bool pw_depth_ok = is_valid;   // is_valid so far is the depth window's verdict
+            is_valid = is_valid && (rpe / std::max(rpe_count, 1.0) <
+                                    pw_rpe_threshold(config.get(), rpe_fx / std::max(rpe_count, 1.0)));
+            ++pw_solver_counters[kPwTrackEvaluated];
+            if (!pw_depth_ok)
+                ++pw_solver_counters[kPwTrackRejectDepth];
+            else if (!is_valid)
+                ++pw_solver_counters[kPwTrackRejectRpe];
+            pw_account_rpe(rpe, rpe_count, pw_depth_ok, is_valid,
+                           kPwTrackRpeSamples, kPwTrackRpeMilliPx);
             track->tag(TT_VALID) = is_valid;
         } else {
             track->landmark.inv_depth = -1.0;
@@ -424,7 +510,9 @@ void SlidingWindowTracker::refine_subwindow() {
             }
         }
 
-        solver->solve();
+        ++pw_solver_counters[kPwSolveCalls];
+    if (!solver->solve())
+        ++pw_solver_counters[kPwSolveUnusable];
         frame->tag(FT_FIX_POSE) = false;
         frame->tag(FT_FIX_MOTION) = false;
     } else {
@@ -458,7 +546,9 @@ void SlidingWindowTracker::refine_subwindow() {
                 }
             }
         }
-        solver->solve();
+        ++pw_solver_counters[kPwSolveCalls];
+    if (!solver->solve())
+        ++pw_solver_counters[kPwSolveUnusable];
         frame->tag(FT_FIX_POSE) = false;
         frame->tag(FT_FIX_MOTION) = false;
     }
@@ -501,6 +591,7 @@ bool SlidingWindowTracker::check_frames_rpe(Track *track, const vector<3> &x) {
     bool is_valid = true;
     double rpe = 0.0;
     double rpe_count = 0.0;
+    double rpe_fx = 0.0;
     for (const auto &[frame, keypoint_index] : track->keypoint_map()) {
         if (!frame->tag(FT_KEYFRAME))
             continue;
@@ -514,8 +605,16 @@ bool SlidingWindowTracker::check_frames_rpe(Track *track, const vector<3> &x) {
                 apply_k(frame->get_keypoint(keypoint_index), frame->K))
                    .norm();
         rpe_count += 1.0;
+        rpe_fx += frame->K(0, 0);
     }
-    is_valid = is_valid && (rpe / std::max(rpe_count, 1.0) < 3.0);
+    const bool pw_depth_ok = is_valid;
+    is_valid = is_valid && (rpe / std::max(rpe_count, 1.0) <
+                            pw_rpe_threshold(config.get(), rpe_fx / std::max(rpe_count, 1.0)));
+    ++pw_solver_counters[kPwFramesRpeCalls];
+    if (!is_valid)
+        ++pw_solver_counters[kPwFramesRpeReject];
+    pw_account_rpe(rpe, rpe_count, pw_depth_ok, is_valid,
+                   kPwFramesRpeSamples, kPwFramesRpeMilliPx);
 
     return is_valid;
 }

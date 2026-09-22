@@ -1,3 +1,6 @@
+#include <atomic>
+#include <cstdlib>
+#include <chrono>
 #include <xrslam/core/detail.h>
 #include <xrslam/core/feature_tracker.h>
 #include <xrslam/core/initializer.h>
@@ -15,6 +18,42 @@
 
 namespace xrslam {
 
+// [bench 2026-09-09] Read-only telemetry for why initialisation has not succeeded yet.
+//
+// Two of init_sfm()'s four failure exits are silent (too few matches, too little parallax), so a
+// device run could only be told "still initialising" with no way to distinguish "the user has not
+// moved" from "the geometry is degenerate". Counting the exits is what turns the 3.5 s
+// time-to-first-pose into an attributable number. Nothing here changes a decision: every increment
+// sits next to an existing return.
+std::atomic<uint64_t> pw_init_counters[8] = {};   // see PwInitCounter
+// [bench 2026-09-09] PW_INIT_FAST_REJECT=1: apply init_sfm()'s own first test -- the number of tracks
+// the first and last sampled keyframes share -- on the source map, BEFORE building the mirror.
+//
+// mirror_keyframe_map() clones eight whole frames, rebuilds every track between consecutive
+// keyframes and concatenates 35 frames of preintegrated IMU, and only then does init_sfm() count the
+// shared tracks and give up. On device that test failed 53 of 54 attempts, so nearly all of that work
+// produced nothing. The count is the same quantity either way: a track reaching the last keyframe was
+// tracked through every frame between, so it appears in every sampled keyframe, which is exactly what
+// the mirror's consecutive-pair chaining reproduces. Same decision, same inputs to everything
+// downstream -- only the work before an unchanged answer goes away.
+const bool pw_init_fast_reject = [] {
+    const char *e = std::getenv("PW_INIT_FAST_REJECT");
+    return e && e[0] == '1';
+}();
+std::atomic<uint64_t> pw_init_mirror_us{0};   // total microseconds spent building mirrors
+
+enum PwInitCounter {
+    kPwInitTooFewFrames = 0,   // mirror_keyframe_map: not enough history yet (the frame-count floor)
+    kPwInitAttempt = 1,        // initialize() ran with a map
+    kPwInitFailMatches = 2,
+    kPwInitFailParallax = 3,
+    kPwInitFailRotation = 4,
+    kPwInitFailTriangulation = 5,
+    kPwInitFailImu = 6,
+    kPwInitSuccess = 7,
+};
+
+
 Initializer::Initializer(std::shared_ptr<Config> config) : config(config) {}
 
 Initializer::~Initializer() = default;
@@ -30,6 +69,7 @@ void Initializer::mirror_keyframe_map(Map *feature_tracking_map,
     init_frame_id = nil();
 
     if (init_frame_index_last < init_frame_index_distance) {
+        ++pw_init_counters[kPwInitTooFewFrames];
         map.reset();
         return;
     }
@@ -37,6 +77,25 @@ void Initializer::mirror_keyframe_map(Map *feature_tracking_map,
     size_t init_frame_index_first =
         init_frame_index_last - init_frame_index_distance;
 
+    if (pw_init_fast_reject) {
+        Frame *src_i = feature_tracking_map->get_frame(init_frame_index_first);
+        Frame *src_j = feature_tracking_map->get_frame(init_frame_index_last);
+        int common = 0;
+        for (size_t ki = 0; ki < src_i->keypoint_num(); ++ki) {
+            if (Track *track = src_i->get_track(ki)) {
+                if (track->get_keypoint_index(src_j) != nil())
+                    ++common;
+            }
+        }
+        if (common < (int)config->initializer_min_matches()) {
+            ++pw_init_counters[kPwInitAttempt];
+            ++pw_init_counters[kPwInitFailMatches];
+            map.reset();
+            return;
+        }
+    }
+
+    const auto pw_t0 = std::chrono::steady_clock::now();
     std::vector<size_t> init_keyframe_indices;
     for (size_t i = 0; i < config->initializer_keyframe_num(); ++i) {
         init_keyframe_indices.push_back(init_frame_index_first +
@@ -73,15 +132,22 @@ void Initializer::mirror_keyframe_map(Map *feature_tracking_map,
             new_data.insert(new_data.end(), old_data.begin(), old_data.end());
         }
     }
+    pw_init_mirror_us += (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - pw_t0)
+                             .count();
 }
 
 std::unique_ptr<SlidingWindowTracker> Initializer::initialize() {
     if (!map)
         return nullptr;
+    ++pw_init_counters[kPwInitAttempt];
     if (!init_sfm())
         return nullptr;
-    if (!init_imu())
+    if (!init_imu()) {
+        ++pw_init_counters[kPwInitFailImu];
         return nullptr;
+    }
+    ++pw_init_counters[kPwInitSuccess];
 
     map->get_frame(0)->tag(FT_FIX_POSE) = true;
 
@@ -188,11 +254,15 @@ bool Initializer::init_sfm() {
         common_track_num++;
     }
 
-    if (common_track_num < (int)config->initializer_min_matches())
+    if (common_track_num < (int)config->initializer_min_matches()) {
+        ++pw_init_counters[kPwInitFailMatches];
         return false;
+    }
     total_parallax /= std::max(common_track_num, 1);
-    if (total_parallax < config->initializer_min_parallax())
+    if (total_parallax < config->initializer_min_parallax()) {
+        ++pw_init_counters[kPwInitFailParallax];
         return false;
+    }
 
     std::vector<matrix<3>> Rs;
     std::vector<vector<3>> Ts;
@@ -204,6 +274,7 @@ bool Initializer::init_sfm() {
                                          1000, config->random());
     if (!decompose_homography(H, RH1, RH2, TH1, TH2, nH1, nH2)) {
         log_debug("SfM init fail: pure rotation.");
+        ++pw_init_counters[kPwInitFailRotation];
         return false; // is pure rotation
     }
     TH1 = TH1.normalized();
@@ -277,6 +348,7 @@ bool Initializer::init_sfm() {
 
     if (triangulated_num < config->initializer_min_triangulation()) {
         log_debug("SfM init fail: triangulation (%zd).", triangulated_num);
+        ++pw_init_counters[kPwInitFailTriangulation];
         return false;
     }
 

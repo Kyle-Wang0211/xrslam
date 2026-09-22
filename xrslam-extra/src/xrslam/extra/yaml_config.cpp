@@ -89,6 +89,9 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
         Config::sliding_window_tracker_frequent();
     m_sliding_window_force_keyframe_landmarks =
         Config::sliding_window_force_keyframe_landmarks();
+    m_sliding_window_rpe_threshold_px = Config::sliding_window_rpe_threshold_px();
+    m_sliding_window_rpe_reference_focal =
+        Config::sliding_window_rpe_reference_focal();
     m_feature_tracker_min_keypoint_distance =
         Config::feature_tracker_min_keypoint_distance();
     m_feature_tracker_max_keypoint_detection =
@@ -236,6 +239,16 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
     if (auto node = find_node(
             slam_config, "sliding_window.force_keyframe_landmarks", false)) {
         assign(m_sliding_window_force_keyframe_landmarks, node);
+    }
+
+    if (auto node =
+            find_node(slam_config, "sliding_window.rpe_threshold_px", false)) {
+        assign(m_sliding_window_rpe_threshold_px, node);
+    }
+
+    if (auto node = find_node(slam_config,
+                              "sliding_window.rpe_reference_focal", false)) {
+        assign(m_sliding_window_rpe_reference_focal, node);
     }
 
     if (auto node = find_node(slam_config,
@@ -428,6 +441,14 @@ size_t YamlConfig::sliding_window_subframe_size() const {
 
 size_t YamlConfig::sliding_window_tracker_frequent() const {
     return m_sliding_window_tracker_frequent;
+}
+
+double YamlConfig::sliding_window_rpe_threshold_px() const {
+    return m_sliding_window_rpe_threshold_px;
+}
+
+double YamlConfig::sliding_window_rpe_reference_focal() const {
+    return m_sliding_window_rpe_reference_focal;
 }
 
 size_t YamlConfig::sliding_window_force_keyframe_landmarks() const {

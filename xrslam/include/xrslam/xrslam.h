@@ -94,6 +94,24 @@ class Config {
     virtual size_t sliding_window_size() const;
     virtual size_t sliding_window_subframe_size() const;
     virtual size_t sliding_window_force_keyframe_landmarks() const;
+    /// [bench 2026-09-17] The mean-reprojection gate on TT_VALID, and the focal length the
+    /// authored value belongs to.
+    ///
+    /// The gate is `rpe_mean < sliding_window_rpe_threshold_px()`, where rpe is in REAL pixels
+    /// (sliding_window_tracker.cpp applies K before taking the norm). A bare pixel number is only
+    /// meaningful next to a focal length: VINS states the same gate as `ave_err * 460 > 3`, i.e.
+    /// 3 px measured on a virtual f=460 camera, and its first author spells out the consequence
+    /// (VINS-Mono issue #48, 2017-07-14): "we tolerate 3-pixel noise under 460 focal lengths. If
+    /// you change to 920, the tolerate pixel will be 6 pixels, since you project the point to a
+    /// further plane."
+    ///
+    /// `sliding_window_rpe_reference_focal() <= 0` keeps the bare threshold, which is what upstream
+    /// does and what every run before this change did. Set it to the focal the number was authored
+    /// against and the gate becomes `threshold_px * fx / reference_focal`, i.e. a fixed angle --
+    /// the convention this codebase already uses two files away (`initializer.cpp:203` passes
+    /// `0.7 / K(0,0)` to the homography RANSAC).
+    virtual double sliding_window_rpe_threshold_px() const;
+    virtual double sliding_window_rpe_reference_focal() const;
     virtual size_t sliding_window_tracker_frequent() const;
 
     virtual double feature_tracker_min_keypoint_distance() const;

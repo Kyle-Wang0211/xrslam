@@ -1,3 +1,7 @@
+#ifdef XRSLAM_GPU_FRONTEND
+#include <xrslam/extra/gpu_image.h>
+#endif
+#include <cmath>
 #include "XRSLAMManager.h"
 #include "xrslam/core/feature_tracker.h"
 #include "xrslam/core/frontend_worker.h"
@@ -124,8 +128,13 @@ int XRSLAMManager::CheckLicense(const char *license_path,
 void XRSLAMManager::PushImage(XRSLAMImage *image) {
     // left img
     if (image->camera_id == 0) {
+#ifdef XRSLAM_GPU_FRONTEND
+        std::shared_ptr<xrslam::extra::OpenCvImage> opencv_image =
+            xrslam::extra::GpuImage::create_image();   // GpuImage iff PW_XRSLAM_GPU_FRONTEND=1 and the GPU front end initialised
+#else
         std::shared_ptr<xrslam::extra::OpenCvImage> opencv_image =
             std::make_shared<xrslam::extra::OpenCvImage>();
+#endif
         int cols = config_->camera_resolution()[0];
         int rows = config_->camera_resolution()[1];
         opencv_image->t = image->timeStamp;
@@ -149,6 +158,10 @@ void XRSLAMManager::PushImage(XRSLAMImage *image) {
         }
             
         opencv_image->raw = img.clone();
+#ifdef XRSLAM_GPU_FRONTEND
+        if (auto *g = dynamic_cast<xrslam::extra::GpuImage *>(opencv_image.get()))   // pipeline: start the GPU pyramid now, on the capture thread
+            g->prefetch(config_->feature_tracker_clahe_clip_limit(), config_->feature_tracker_clahe_width(), config_->feature_tracker_clahe_height());
+#endif
 
         std::lock_guard<std::mutex> lck(input_mutex_);
         cur_image_ = std::shared_ptr<xrslam::Image>(opencv_image);
@@ -156,13 +169,121 @@ void XRSLAMManager::PushImage(XRSLAMImage *image) {
 }
 
 void XRSLAMManager::PushAcceleration(XRSLAMAcceleration *acc) {
-    detail_->track_accelerometer(acc->timestamp, acc->data[0], acc->data[1],
-                                 acc->data[2]);
+    Pose p = detail_->track_accelerometer(acc->timestamp, acc->data[0],
+                                          acc->data[1], acc->data[2]);
+    KeepPropagatedPose(acc->timestamp, p);
 }
 
 void XRSLAMManager::PushGyroscope(XRSLAMGyroscope *gyro) {
-    detail_->track_gyroscope(gyro->timestamp, gyro->data[0], gyro->data[1],
-                             gyro->data[2]);
+    Pose p = detail_->track_gyroscope(gyro->timestamp, gyro->data[0],
+                                      gyro->data[1], gyro->data[2]);
+    KeepPropagatedPose(gyro->timestamp, p);
+}
+
+// Both track_* entry points return Detail::predict_pose(t). Upstream's C++ API hands that pose to
+// its caller; this C interface used to drop it, which left XRSLAM_RESULT_BODY_POSE advancing only
+// once per image. Storing it costs one mutex per IMU sample and changes no estimate.
+void XRSLAMManager::KeepPropagatedPose(double t, const Pose &pose) {
+    if (!std::isfinite(t) || pose.q.coeffs().isZero())
+        return;
+    std::lock_guard<std::mutex> lck(imu_pose_mutex_);
+    if (t < imu_pose_timestamp_)
+        return;
+    imu_pose_ = pose;
+    imu_pose_timestamp_ = t;
+    imu_pose_valid_ = true;
+}
+
+void XRSLAMManager::GetResultPropagatedPose(XRSLAMPose *pose) const {
+    std::lock_guard<std::mutex> lck(imu_pose_mutex_);
+    if (!imu_pose_valid_) {
+        pose->timestamp = 0.0;
+        for (int i = 0; i < 4; ++i) pose->quaternion[i] = 0.0;
+        for (int i = 0; i < 3; ++i) pose->translation[i] = 0.0;
+        return;
+    }
+    pose->timestamp = imu_pose_timestamp_;
+    pose->quaternion[0] = imu_pose_.q.x();
+    pose->quaternion[1] = imu_pose_.q.y();
+    pose->quaternion[2] = imu_pose_.q.z();
+    pose->quaternion[3] = imu_pose_.q.w();
+    pose->translation[0] = imu_pose_.p.x();
+    pose->translation[1] = imu_pose_.p.y();
+    pose->translation[2] = imu_pose_.p.z();
+}
+
+// [bench 2026-09-17] The two accessors that carry the OpenXR/Monado relation flags alongside the
+// pose. Nothing new is estimated here: every bit is decided from state this interface already had
+// (imu_pose_valid_, the quaternion it was about to hand back, and the system state), it just stops
+// throwing that state away.
+namespace {
+// A zero-norm quaternion is not an orientation. XRSLAM emits one on the first TRACKING_SUCCESS and
+// whenever no propagated pose exists yet; under the source contract that is ORIENTATION_VALID unset
+// ("applications must not read the pose field's orientation if this flag is unset"), not a failure.
+inline bool pw_quaternion_readable(const XRSLAMPose *pose) {
+    const double n2 = pose->quaternion[0] * pose->quaternion[0] +
+                      pose->quaternion[1] * pose->quaternion[1] +
+                      pose->quaternion[2] * pose->quaternion[2] +
+                      pose->quaternion[3] * pose->quaternion[3];
+    return std::isfinite(n2) && n2 > 1.0e-12;
+}
+inline bool pw_translation_readable(const XRSLAMPose *pose) {
+    return std::isfinite(pose->translation[0]) && std::isfinite(pose->translation[1]) &&
+           std::isfinite(pose->translation[2]);
+}
+} // namespace
+
+void XRSLAMManager::GetPropagatedPoseRelation(XRSLAMPose *pose, unsigned int *flags) const {
+    // Assign the none-mask before anything else, the way the source does before an error return.
+    if (flags != nullptr)
+        *flags = XRSLAM_SPACE_RELATION_BITMASK_NONE;
+    if (pose == nullptr)
+        return;
+    GetResultPropagatedPose(pose);
+    if (flags == nullptr)
+        return;
+    unsigned int f = XRSLAM_SPACE_RELATION_BITMASK_NONE;
+    if (pose->timestamp > 0.0) {
+        // A propagated pose is dead reckoning: the spec names "inertial dead reckoning" as exactly
+        // the case that stays VALID with TRACKED cleared, so this path never sets a TRACKED bit.
+        if (pw_quaternion_readable(pose))
+            f |= XRSLAM_SPACE_RELATION_ORIENTATION_VALID_BIT;
+        if (pw_translation_readable(pose))
+            f |= XRSLAM_SPACE_RELATION_POSITION_VALID_BIT;
+    }
+    *flags = f;
+}
+
+void XRSLAMManager::GetBodyPoseRelation(XRSLAMPose *pose, unsigned int *flags) const {
+    if (flags != nullptr)
+        *flags = XRSLAM_SPACE_RELATION_BITMASK_NONE;
+    if (pose == nullptr)
+        return;
+    GetResultBodyPose(pose);
+    if (flags == nullptr)
+        return;
+    unsigned int f = XRSLAM_SPACE_RELATION_BITMASK_NONE;
+    if (pose->timestamp <= 0.0) {
+        *flags = f;
+        return;
+    }
+    const bool q_ok = pw_quaternion_readable(pose);
+    const bool p_ok = pw_translation_readable(pose);
+    if (q_ok)
+        f |= XRSLAM_SPACE_RELATION_ORIENTATION_VALID_BIT;
+    if (p_ok)
+        f |= XRSLAM_SPACE_RELATION_POSITION_VALID_BIT;
+    // TRACKED means actively observed. The only signal this interface has for that is the system
+    // state: SYS_TRACKING is the sliding window running on images. It is a weak signal -- upstream
+    // sets it from a pointer being non-null (frontend_worker.cpp:180-187) -- so it is used only to
+    // *withhold* the TRACKED bits, never to assert VALID.
+    if (detail_ != nullptr && detail_->get_system_state() == SysState::SYS_TRACKING) {
+        if (q_ok)
+            f |= XRSLAM_SPACE_RELATION_ORIENTATION_TRACKED_BIT;
+        if (p_ok)
+            f |= XRSLAM_SPACE_RELATION_POSITION_TRACKED_BIT;
+    }
+    *flags = f;
 }
 
 void XRSLAMManager::RunOneFrame() {

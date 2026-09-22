@@ -39,8 +39,9 @@ class OpenCvImage : public Image {
     cv::Mat image;
     cv::Mat raw;
 
-  private:
+  protected:   // [gpufe] GpuImage builds this lazily for CPU fallbacks
     std::vector<cv::Mat> image_pyramid;
+  private:
     std::vector<cv::Mat> image_levels;
     std::vector<vector<2>> scale_levels;
 

@@ -1,4 +1,5 @@
 #include <xrslam/extra/opencv_image.h>
+#include "../../../../xrslam/src/xrslam/utility/pw_trace.h"
 #include <xrslam/extra/poisson_disk_filter.h>
 
 using namespace cv;
@@ -39,6 +40,7 @@ void OpenCvImage::detect_keypoints(std::vector<vector<2>> &keypoints,
                                    size_t max_points,
                                    double keypoint_distance) const {
 
+    PW_ZONE("frontend.cpu.detect_gftt");
     std::vector<KeyPoint> cvkeypoints;
 
     gftt(max_points)->detect(image, cvkeypoints);
@@ -76,6 +78,7 @@ void OpenCvImage::track_keypoints(const Image *next_image,
                                   const std::vector<vector<2>> &curr_keypoints,
                                   std::vector<vector<2>> &next_keypoints,
                                   std::vector<char> &result_status) const {
+    PW_ZONE("frontend.cpu.track_lk");
     std::vector<Point2f> curr_cvpoints = to_opencv(curr_keypoints);
     std::vector<Point2f> next_cvpoints;
     if (next_keypoints.size() > 0) {
@@ -154,6 +157,7 @@ void OpenCvImage::track_keypoints(const Image *next_image,
 }
 
 void OpenCvImage::preprocess(double clipLimit, int width, int height) {
+    PW_ZONE("frontend.cpu.clahe_and_pyramid");
     clahe(clipLimit, width, height)->apply(image, image);
     image_pyramid.clear();
     buildOpticalFlowPyramid(image, image_pyramid, Size(21, 21),

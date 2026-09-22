@@ -139,6 +139,7 @@ PUBLIC
   depends::spdlog
   depends::ceres-solver
   depends::opencv
-)
+
+    xrslam-tracy)
 
 set(XRSLAM_LIBRARY_DIR ${CMAKE_CURRENT_BINARY_DIR} CACHE INTERNAL "")

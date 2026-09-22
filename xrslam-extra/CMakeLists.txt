@@ -32,7 +32,21 @@ if(TARGET depends::opencv)
     PUBLIC
       xrslam-extra-common
       depends::opencv
+      xrslam-tracy
   )
+  if(XRSLAM_TRACY)
+    # Compiled exactly once; everything is libtool'd into one archive afterwards.
+    target_sources(xrslam-extra-opencv-image PRIVATE "${TRACY_ROOT}/public/TracyClient.cpp")
+  endif()
+  option(XRSLAM_GPU_FRONTEND "GPU front end (pw_gpu_frontend on Dawn): CLAHE/pyramid/GFTT/LK on the GPU" OFF)
+  if(XRSLAM_GPU_FRONTEND)
+    set(PW_GPU_FRONTEND_INCLUDE_DIR "" CACHE PATH "dir containing pw_gpu_frontend.h (aether_cpp/tools)")
+    target_sources(xrslam-extra-opencv-image PRIVATE
+      ${XRSLAM_EXTRA_INCLUDE_DIR}/xrslam/extra/gpu_image.h
+      ${XRSLAM_EXTRA_SOURCE_DIR}/xrslam/extra/gpu_image.cpp)
+    target_include_directories(xrslam-extra-opencv-image PRIVATE ${PW_GPU_FRONTEND_INCLUDE_DIR})
+    target_compile_definitions(xrslam-extra-opencv-image PUBLIC XRSLAM_GPU_FRONTEND=1)
+  endif()
 endif()
 
 if(TARGET depends::yaml-cpp)

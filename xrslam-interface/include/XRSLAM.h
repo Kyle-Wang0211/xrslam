@@ -221,6 +221,12 @@ void XRSLAMSetViewer(void *viewer);
  * @param[in]  result_type slam result type.
  * @param[out] result_data result data.
  */
+/*!
+ * \brief Get the IMU-propagated pose (upstream predict_pose at the newest IMU timestamp).
+ * Additive to XRSLAMGetResult, whose behaviour is unchanged.
+ */
+void XRSLAMGetPropagatedPose(XRSLAMPose *pose);
+
 void XRSLAMGetResult(XRSLAMResultType result_type, void *result_data);
 
 /**
