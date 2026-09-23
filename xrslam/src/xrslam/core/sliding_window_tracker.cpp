@@ -943,133 +943,104 @@ bool SlidingWindowTracker::pw_track_with_recovery() {
 
     Frame *frame_j = map->get_frame(map->frame_num() - 1);
     const double t = frame_j->image->t;
-    const size_t min_tracked = config->tracking_recovery_min_tracked_landmarks();
+    const size_t lose_below = config->tracking_recovery_min_tracked_landmarks();
+    const size_t recover_above = config->tracking_recovery_recover_tracked_landmarks_above();
     const bool long_term_reset = config->tracking_recovery_long_term_reset();
 
-    bool short_term_expired = false;
-    if (pw_state == PwRecoveryState::SHORT_TERM_LOST &&
-        t - pw_t_lost > config->tracking_recovery_lost_timeout()) {
-        // [P2][S1]: after 5 s in short-term lost the short-term stage is over.
-        if (long_term_reset) {
-            // [P3]: long-term lost = new map.
-            log_info("[pw-recovery] t=%.6f short-term lost for %.3f s > %.3f s: "
-                     "long-term lost, map reset",
-                     t, t - pw_t_lost, config->tracking_recovery_lost_timeout());
-            return false;
-        }
-        // Reset off: carry on the way the engine always has (no world-frame jump).
-        log_info("[pw-recovery] t=%.6f short-term lost for %.3f s > %.3f s: giving up the "
-                 "search, continuing without reset",
-                 t, t - pw_t_lost, config->tracking_recovery_lost_timeout());
-        pw_state = PwRecoveryState::OK;
-        pw_snapshot.clear();
-        short_term_expired = true;
-        pw_armed = false;
-    }
-
+    bool searched = false;
     if (pw_state == PwRecoveryState::SHORT_TERM_LOST) {
-        // [P2]: body state from IMU (mirror_frame() already predicted it); project the
-        // retained map points with that pose and search a large window around them.
-        std::vector<size_t> refound;
-        pw_search_map_points(frame_j, refound);
-        // [P2] "included in visual-inertial optimization"; [P5]: the per-frame pose solve,
-        // with its IMU term spanning the whole gap (see pw_localize_lost_frame()).
-        pw_localize_lost_frame(frame_j);
-        size_t rejected = 0;
-        if (!refound.empty()) {
-            rejected = pw_reject_refound_outliers(frame_j, refound);
-            if (rejected > 0)
-                pw_localize_lost_frame(frame_j); // re-solve without the rejected matches
-        }
-        const size_t tracked = pw_count_tracked_landmarks(frame_j);
-        if (tracked >= min_tracked) {
-            // How many of the tracked map points are pre-loss ones (the retained map) and how
-            // many were created after the loss by the sighted-frame path below.
-            size_t retained = 0;
-            for (size_t k = 0; k < frame_j->keypoint_num(); ++k) {
-                Track *track = frame_j->get_track(k);
-                if (!track || !track->all_tagged(TT_VALID, TT_TRIANGULATED, TT_STATIC))
-                    continue;
-                for (const PwSnapshotPoint &point : pw_snapshot)
-                    if (point.track_id == track->id()) {
-                        ++retained;
-                        break;
-                    }
-            }
-            log_info("[pw-recovery] t=%.6f RECOVERED after %.3f s: %zu tracked map points "
-                     "(>= %zu), %zu of them pre-loss (re-found this frame %zu, rejected %zu)",
-                     t, t - pw_t_lost, tracked, min_tracked, retained,
-                     refound.size() - rejected, rejected);
-            pw_state = PwRecoveryState::OK;
-            pw_snapshot.clear();
-            // Make the recovering frame a keyframe so the matches also enter the window
-            // optimisation (refine_window) together with the whole IMU chain of the gap.
-            frame_j->tag(FT_KEYFRAME) = true;
-            pw_run_keyframe_pipeline();
-            pw_pin_reference(frame_j);
-            pw_publish_landmarks(map.get());
-            return true;
-        }
-        if (pw_count_linked_keypoints(frame_j) < min_tracked) {
-            // Blind frame (black / blurred: the front end carried almost nothing into it).
-            // Nothing new can be learnt from it, so it must not become a keyframe: the window
-            // stays as it was and the retained map points stay searchable.
-            pw_demote_newframe_to_subframe();
-        } else {
-            // Sighted frame whose features are not (yet) the retained map. ORB-SLAM3 keeps
-            // inserting keyframes while lost (src Tracking.cc:2248, NeedNewKeyFrame :3182) and
-            // tracks the new points they create; here that is the pre-existing pipeline, run
-            // unchanged, while the search for the retained points continues on later frames
-            // for as long as they are still in the window (and at most lost_timeout).
-            if (manage_keyframe()) {
-                track_landmark();
-                refine_window();
-                slide_window();
-            } else {
-                refine_subwindow();
-            }
-            pw_anchor_frame_id = frame_j->id();
-        }
-        pw_publish_landmarks(map.get());
-        return true;
-    }
-
-    // Tracking OK so far: the ordinary per-frame pose solve first ([P5]).
-    localize_newframe();
-    const size_t tracked = pw_count_tracked_landmarks(frame_j);
-    if (tracked >= min_tracked)
-        pw_armed = true;
-    if (tracked < min_tracked && pw_armed && !short_term_expired) {
-        // [P1][S2] visually lost.
-        if (t - pw_t_init < config->tracking_recovery_min_map_age()) {
+        if (t - pw_t_lost > config->tracking_recovery_lost_timeout()) {
+            // [S1] Tracking.cc:1993-1997: RECENTLY_LOST -> LOST after 5 s.
             if (long_term_reset) {
-                // [P4][S3]
-                log_info("[pw-recovery] t=%.6f lost (%zu tracked < %zu) %.3f s after "
-                         "initialisation (< %.3f s): map discarded, reset",
-                         t, tracked, min_tracked, t - pw_t_init,
-                         config->tracking_recovery_min_map_age());
+                // [P3][S5]: LOST => new map.
+                log_info("[pw-recovery] t=%.6f short-term lost for %.3f s > %.3f s: "
+                         "long-term lost, map reset",
+                         t, t - pw_t_lost, config->tracking_recovery_lost_timeout());
                 return false;
             }
-            // Reset off: the paper never searches a map this young (it discards it);
-            // keep the pre-existing behaviour for this frame.
-        } else if (pw_take_snapshot() && pw_snapshot.size() >= min_tracked) {
-            pw_state = PwRecoveryState::SHORT_TERM_LOST;
-            pw_t_lost = t;
-            pw_anchor_frame_id = pw_reference_frame_id;
-            log_info("[pw-recovery] t=%.6f LOST: %zu tracked map points < %zu; short-term "
-                     "lost, %zu retained map points to search",
-                     t, tracked, min_tracked, pw_snapshot.size());
-            pw_demote_newframe_to_subframe();
-            pw_publish_landmarks(map.get());
-            return true;
-        } else {
-            // Fewer retained map points than the recovery threshold: the search could never
-            // succeed, so the short-term stage is skipped (pre-existing behaviour).
+            // Reset off (default): stop searching, carry on as the engine always did.
+            log_info("[pw-recovery] t=%.6f short-term lost for %.3f s > %.3f s: giving up the "
+                     "search, continuing without reset",
+                     t, t - pw_t_lost, config->tracking_recovery_lost_timeout());
+            pw_state = PwRecoveryState::OK;
             pw_snapshot.clear();
+            pw_gave_up = true;
+        } else {
+            // [S6] Tracking.cc:1981-1990 + :2122-2126: RECENTLY_LOST in VI mode =
+            // PredictStateIMU() (here: mirror_frame()'s per-frame prediction from the previous
+            // frame) and then TrackLocalMap(): search the local map with the lost-state window,
+            // then the pose-inertial optimisation (here: localize_newframe()).
+            std::vector<size_t> refound;
+            pw_search_map_points(frame_j, refound);
+            searched = true;
+            localize_newframe();
+            size_t rejected = 0;
+            if (!refound.empty()) {
+                rejected = pw_reject_refound_outliers(frame_j, refound);
+                if (rejected > 0)
+                    localize_newframe(); // re-solve without the rejected matches
+            }
+            const size_t tracked = pw_count_tracked_landmarks(frame_j);
+            // [S2'] Tracking.cc:3033: while RECENTLY_LOST, TrackLocalMap succeeds with > 10
+            // inliers; :2142 then sets OK.
+            if (tracked > recover_above) {
+                size_t retained = 0;
+                for (size_t k = 0; k < frame_j->keypoint_num(); ++k) {
+                    Track *track = frame_j->get_track(k);
+                    if (!track || !track->all_tagged(TT_VALID, TT_TRIANGULATED, TT_STATIC))
+                        continue;
+                    for (const PwSnapshotPoint &point : pw_snapshot)
+                        if (point.track_id == track->id()) {
+                            ++retained;
+                            break;
+                        }
+                }
+                log_info("[pw-recovery] t=%.6f RECOVERED after %.3f s: %zu tracked map points "
+                         "(> %zu), %zu of them pre-loss (re-found this frame %zu, rejected %zu)",
+                         t, t - pw_t_lost, tracked, recover_above, retained,
+                         refound.size() - rejected, rejected);
+                pw_state = PwRecoveryState::OK;
+                pw_snapshot.clear();
+            }
         }
     }
 
-    // Unchanged rest of track().
+    if (!searched) {
+        // Tracking OK: the ordinary per-frame pose solve ([P5]).
+        localize_newframe();
+        const size_t tracked = pw_count_tracked_landmarks(frame_j);
+        if (tracked >= lose_below)
+            pw_gave_up = false;
+        // [P1][S2] Tracking.cc:3039: VI-monocular TrackLocalMap fails with < 15 inliers
+        // (IMU initialised); :2144-2162 OK -> RECENTLY_LOST.
+        if (tracked < lose_below && !pw_gave_up) {
+            if (t - pw_t_init < config->tracking_recovery_min_map_age()) {
+                if (long_term_reset) {
+                    // [P4][S3] Tracking.cc:2148-2153
+                    log_info("[pw-recovery] t=%.6f lost (%zu tracked < %zu) %.3f s after "
+                             "initialisation (< %.3f s): map discarded, reset",
+                             t, tracked, lose_below, t - pw_t_init,
+                             config->tracking_recovery_min_map_age());
+                    return false;
+                }
+                // Reset off: the paper never searches a map this young (it discards it);
+                // the frame goes through the pre-existing path only.
+            } else {
+                pw_take_snapshot();
+                pw_state = PwRecoveryState::SHORT_TERM_LOST;
+                pw_t_lost = t;
+                log_info("[pw-recovery] t=%.6f LOST: %zu tracked map points < %zu; short-term "
+                         "lost, %zu retained map points to search",
+                         t, tracked, lose_below, pw_snapshot.size());
+            }
+        }
+    }
+
+    // [S7] Tracking.cc:2205-2250: keyframes keep being inserted while RECENTLY_LOST
+    // (IMU-monocular NeedNewKeyFrame c4 :3182, mInsertKFsLost default true :1327), so the
+    // IMU chain stays a sequence of per-keyframe factors in the local inertial BA. Here that
+    // is the unchanged rest of track(): this tracker's own keyframe decision, triangulation,
+    // window optimisation and slide -- in every state.
     if (manage_keyframe()) {
         track_landmark();
         refine_window();
@@ -1077,69 +1048,10 @@ bool SlidingWindowTracker::pw_track_with_recovery() {
     } else {
         refine_subwindow();
     }
-    pw_pin_reference(frame_j);
+    if (pw_state == PwRecoveryState::OK)
+        pw_pin_reference(frame_j);
     pw_publish_landmarks(map.get());
     return true;
-}
-
-void SlidingWindowTracker::pw_localize_lost_frame(Frame *frame_j) {
-    // localize_newframe() with one difference. localize_newframe() ties the new frame to the
-    // previous frame (held constant) by that frame's short preintegration. While lost, the
-    // previous frame is itself only an IMU prediction, so that prior would be as tight as a
-    // 1/60 s interval although the prediction error has been growing for the whole gap: the
-    // measured effect on run-6e2d4b99 was that 30 re-found map points moved the solved pose
-    // by < 0.05 px. ORB-SLAM3's tracking optimisation carries the uncertainty through its
-    // chain of per-frame priors; the equivalent here is a single preintegration from the last
-    // visually constrained frame (the anchor) over the whole gap -- the same concatenation of
-    // subframe IMU data that refine_window() builds for keyframes. When the previous frame
-    // is itself the anchor this is exactly localize_newframe().
-    Frame *keyframe_i = map->get_frame(map->frame_num() - 2);
-    Frame *anchor = keyframe_i;
-    size_t first_after_anchor = 0;
-    for (size_t s = 0; s < keyframe_i->subframes.size(); ++s) {
-        if (keyframe_i->subframes[s]->id() == pw_anchor_frame_id) {
-            anchor = keyframe_i->subframes[s].get();
-            first_after_anchor = s + 1;
-        }
-    }
-    PreIntegrator gap = frame_j->preintegration;
-    std::vector<ImuData> imu_data;
-    for (size_t s = first_after_anchor; s < keyframe_i->subframes.size(); ++s) {
-        const auto &d = keyframe_i->subframes[s]->preintegration.data;
-        imu_data.insert(imu_data.end(), d.begin(), d.end());
-    }
-    gap.data.insert(gap.data.begin(), imu_data.begin(), imu_data.end());
-    if (!gap.integrate(frame_j->image->t, anchor->motion.bg, anchor->motion.ba, true, true))
-        return;
-
-    auto solver = Solver::create();
-    solver->add_frame_states(frame_j);
-    solver->put_factor(Solver::create_preintegration_prior_factor(anchor, frame_j, gap));
-    for (size_t k = 0; k < frame_j->keypoint_num(); ++k) {
-        if (Track *track = frame_j->get_track(k)) {
-            if (track->all_tagged(TT_VALID, TT_TRIANGULATED, TT_STATIC)) {
-                solver->put_factor(Solver::create_reprojection_prior_factor(frame_j, track));
-            }
-        }
-    }
-    ++pw_solver_counters[kPwSolveCalls];
-    if (!solver->solve())
-        ++pw_solver_counters[kPwSolveUnusable];
-}
-
-void SlidingWindowTracker::pw_run_keyframe_pipeline() {
-    track_landmark();
-    refine_window();
-    slide_window();
-}
-
-size_t SlidingWindowTracker::pw_count_linked_keypoints(Frame *frame) const {
-    // Keypoints the front end carried into this frame from the previous one (any track).
-    size_t n = 0;
-    for (size_t k = 0; k < frame->keypoint_num(); ++k)
-        if (frame->get_track(k))
-            ++n;
-    return n;
 }
 
 size_t SlidingWindowTracker::pw_count_tracked_landmarks(Frame *frame) const {
@@ -1147,7 +1059,8 @@ size_t SlidingWindowTracker::pw_count_tracked_landmarks(Frame *frame) const {
     // TT_VALID+TT_TRIANGULATED+TT_STATIC: exactly the set localize_newframe() uses as fixed
     // map points ([P5]). TT_VALID is this tracker's own inlier decision (the mean-rpe gate
     // in refine_window()), i.e. the analogue of ORB-SLAM3's inlier count after pose
-    // optimisation ([S2] "mnMatchesInliers").
+    // optimisation ([S2] "mnMatchesInliers"). It includes points created after the loss,
+    // as ORB-SLAM3's local map does.
     size_t n = 0;
     for (size_t k = 0; k < frame->keypoint_num(); ++k) {
         Track *track = frame->get_track(k);
@@ -1208,15 +1121,6 @@ size_t SlidingWindowTracker::pw_reject_refound_outliers(Frame *frame,
         }
     }
     return rejected;
-}
-
-void SlidingWindowTracker::pw_demote_newframe_to_subframe() {
-    // Same operation as manage_keyframe()'s non-keyframe branch, without its keyframe
-    // promotion rules: a lost frame never becomes a keyframe, so the window does not slide
-    // and the pre-loss keyframes keep their map points. Its pose stays the IMU prediction
-    // made by mirror_frame() ([P2] "estimated from IMU readings"); no refine_subwindow().
-    Frame *keyframe_i = map->get_frame(map->frame_num() - 2);
-    keyframe_i->subframes.emplace_back(map->detach_frame(map->frame_num() - 1));
 }
 
 void SlidingWindowTracker::pw_pin_reference(Frame *frame) {
