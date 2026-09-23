@@ -1,3 +1,4 @@
+#include <atomic>
 #include <ceres/ceres.h>
 #include <chrono>
 #include <xrslam/estimation/ceres/marginalization_factor.h>
@@ -9,6 +10,26 @@
 #include <xrslam/estimation/solver.h>
 #include <xrslam/estimation/state.h>
 #include <xrslam/map/frame.h>
+
+// [pw 2026-09-23 solver time budget] Read-only telemetry, one set per process.
+// Filled from the Ceres summary AFTER each Solve() returns; nothing here is read
+// back by the estimator, so trajectories do not depend on it. Exported with C
+// linkage so a replay harness can dlsym() it and take per-frame deltas
+// (pw_tools/regression/euroc_runner.cpp --timing-csv). "scoped" = solves inside a
+// Solver::FrameBudgetScope (the per-frame sliding-window solves), "unscoped" =
+// everything else (initializer). Times are Ceres' own total_time_in_seconds.
+extern "C" {
+std::atomic<unsigned long long> pw_solver_scoped_ns{0};
+std::atomic<unsigned long long> pw_solver_scoped_calls{0};
+std::atomic<unsigned long long> pw_solver_scoped_iterations{0};
+std::atomic<unsigned long long> pw_solver_unscoped_ns{0};
+std::atomic<unsigned long long> pw_solver_unscoped_calls{0};
+// how scoped solves ended
+std::atomic<unsigned long long> pw_solver_stop_budget{0};     // OKVIS callback (USER_SUCCESS)
+std::atomic<unsigned long long> pw_solver_stop_time_limit{0}; // max_solver_time_in_seconds
+std::atomic<unsigned long long> pw_solver_stop_iter_limit{0}; // max_num_iterations
+std::atomic<unsigned long long> pw_solver_stop_converged{0};  // CONVERGENCE
+}
 
 namespace xrslam {
 
@@ -232,6 +253,41 @@ bool Solver::solve(bool verbose) {
     }
 
     ceres::Solve(solver_options, details->problem.get(), &solver_summary);
+
+    // telemetry only (see top of file); nothing below feeds the estimator.
+    const auto ns = (unsigned long long)(solver_summary.total_time_in_seconds * 1e9);
+    if (scope) {
+        pw_solver_scoped_ns.fetch_add(ns, std::memory_order_relaxed);
+        pw_solver_scoped_calls.fetch_add(1, std::memory_order_relaxed);
+        pw_solver_scoped_iterations.fetch_add(
+            (unsigned long long)(solver_summary.num_successful_steps +
+                                 solver_summary.num_unsuccessful_steps),
+            std::memory_order_relaxed);
+        // Ceres 1.14 (the pinned build): a callback returning
+        // SOLVER_TERMINATE_SUCCESSFULLY ends as USER_SUCCESS (minimizer.cc:69-72);
+        // both hard limits end as NO_CONVERGENCE and differ only in the message,
+        // "Maximum solver time reached. ..." (trust_region_minimizer.cc:609) vs
+        // "Maximum number of iterations reached. ..." (:627).
+        switch (solver_summary.termination_type) {
+        case ceres::USER_SUCCESS:
+            pw_solver_stop_budget.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case ceres::CONVERGENCE:
+            pw_solver_stop_converged.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case ceres::NO_CONVERGENCE:
+            if (solver_summary.message.compare(0, 19, "Maximum solver time") == 0)
+                pw_solver_stop_time_limit.fetch_add(1, std::memory_order_relaxed);
+            else
+                pw_solver_stop_iter_limit.fetch_add(1, std::memory_order_relaxed);
+            break;
+        default:
+            break;
+        }
+    } else {
+        pw_solver_unscoped_ns.fetch_add(ns, std::memory_order_relaxed);
+        pw_solver_unscoped_calls.fetch_add(1, std::memory_order_relaxed);
+    }
     return solver_summary.IsSolutionUsable();
 }
 
