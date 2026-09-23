@@ -120,6 +120,9 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
             PwScope pw_track(&pw_bk_track_ms, &pw_bk_track_n);
             pw_tracked = sliding_window_tracker->track();
         }
+        // [pw 2026-09-23] Recovery only (sliding_window_tracker.h); always false when off.
+        pw_lost_.store(pw_tracked && sliding_window_tracker->pw_is_lost(),
+                       std::memory_order_relaxed);
         if (pw_tracked) {
 #if defined(XRSLAM_IOS)
             synchronized(detail->feature_tracker->keymap) {
@@ -135,6 +138,12 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
             std::unique_lock lk(latest_state_mutex);
             latest_state = {{}, nil(), {}, {}};
             lk.unlock();
+            // [pw 2026-09-23] Unreachable before tracking recovery existed (track() used to
+            // return true unconditionally). Recovery gives up here ([P3]/[P4] in
+            // sliding_window_tracker.h): also drop the pose the feature tracker keeps
+            // propagating, so no dead-reckoned pose is reported while re-initialising.
+            if (config->tracking_recovery_enable())
+                detail->feature_tracker->pw_reset_latest_state();
             initializer = std::make_unique<Initializer>(config);
             sliding_window_tracker.reset();
         }
@@ -181,7 +190,9 @@ SysState FrontendWorker::get_system_state() const {
     if (initializer) {
         return SysState::SYS_INITIALIZING;
     } else if (sliding_window_tracker) {
-        return SysState::SYS_TRACKING;
+        // [pw 2026-09-23] SYS_TRACKING_LOST only with tracking recovery on.
+        return pw_lost_.load(std::memory_order_relaxed) ? SysState::SYS_TRACKING_LOST
+                                                        : SysState::SYS_TRACKING;
     }
     return SysState::SYS_UNKNOWN;
 }

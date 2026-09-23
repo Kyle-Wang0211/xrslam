@@ -372,6 +372,10 @@ void XRSLAMManager::GetResultState(XRSLAMState *state) const {
         *state = XRSLAM_STATE_TRACKING_FAIL;
     } else if (cur_state == SYS_UNKNOWN) {
         *state = XRSLAM_STATE_TRACKING_FAIL;
+    } else if (cur_state == SYS_TRACKING_LOST) {
+        // [pw 2026-09-23] tracking recovery's short-term lost (IMU-only pose); never
+        // reported with it off.
+        *state = XRSLAM_STATE_TRACKING_FAIL;
     }
 }
 void XRSLAMManager::GetResultLandmarks(XRSLAMLandmarks *landmarks) const {

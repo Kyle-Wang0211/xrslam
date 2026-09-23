@@ -51,6 +51,7 @@ class FrontendWorker : public Worker {
   private:
     std::deque<size_t> pending_frame_ids;
     std::atomic<size_t> pending_count_{0};
+    std::atomic<bool> pw_lost_{false}; // [pw 2026-09-23] tracking recovery, see .cpp
 
     XRSLAM::Detail *detail;
     std::shared_ptr<Config> config;
