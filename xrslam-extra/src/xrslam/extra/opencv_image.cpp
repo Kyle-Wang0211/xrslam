@@ -156,6 +156,74 @@ void OpenCvImage::track_keypoints(const Image *next_image,
     }
 }
 
+// [pw 2026-09-23] Tracking-loss recovery's guided search (xrslam.h). Identical LK call,
+// termination criteria, 20 px border and 0.5 px forward-backward check as track_keypoints()
+// above; only the motion gate differs: the result must lie within max_offset of the
+// prediction it was started from, instead of within rows/4 of where the point was in the
+// source image (the source here is a frame from before the loss, seconds earlier).
+void OpenCvImage::track_keypoints_guided(const Image *next_image,
+                                         const std::vector<vector<2>> &curr_keypoints,
+                                         std::vector<vector<2>> &next_keypoints,
+                                         std::vector<char> &result_status,
+                                         double max_offset) const {
+    result_status.assign(curr_keypoints.size(), 0);
+    const OpenCvImage *next_cvimage = dynamic_cast<const OpenCvImage *>(next_image);
+    if (!next_cvimage || curr_keypoints.empty() ||
+        next_keypoints.size() != curr_keypoints.size())
+        return;
+    // Subclasses may build the CPU pyramid lazily; build a local one if it is absent.
+    std::vector<Mat> own_pyr, next_pyr;
+    const std::vector<Mat> *pa = &image_pyramid, *pb = &next_cvimage->image_pyramid;
+    if (pa->empty()) {
+        if (image.empty())
+            return;
+        buildOpticalFlowPyramid(image, own_pyr, Size(21, 21), (int)level_num(), true);
+        pa = &own_pyr;
+    }
+    if (pb->empty()) {
+        if (next_cvimage->image.empty())
+            return;
+        buildOpticalFlowPyramid(next_cvimage->image, next_pyr, Size(21, 21),
+                                (int)next_cvimage->level_num(), true);
+        pb = &next_pyr;
+    }
+    std::vector<Point2f> curr_cvpoints = to_opencv(curr_keypoints);
+    std::vector<Point2f> init_cvpoints = to_opencv(next_keypoints);
+    std::vector<Point2f> next_cvpoints = init_cvpoints;
+    Mat cvstatus, cverr;
+    calcOpticalFlowPyrLK(*pa, *pb, curr_cvpoints, next_cvpoints, cvstatus, cverr,
+                         Size(21, 21), (int)level_num(),
+                         TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 30, 0.01),
+                         OPTFLOW_USE_INITIAL_FLOW);
+    const int cols = next_cvimage->image.cols, rows = next_cvimage->image.rows;
+    for (size_t i = 0; i < next_cvpoints.size(); ++i) {
+        result_status[i] = cvstatus.at<unsigned char>((int)i);
+        if (next_cvpoints[i].x < 20 || next_cvpoints[i].x >= cols - 20 ||
+            next_cvpoints[i].y < 20 || next_cvpoints[i].y >= rows - 20)
+            result_status[i] = 0;
+        if (result_status[i] && cv::norm(next_cvpoints[i] - init_cvpoints[i]) > max_offset)
+            result_status[i] = 0;
+    }
+    std::vector<uchar> reverse_status;
+    std::vector<float> reverse_err;
+    std::vector<Point2f> reverse_pts = curr_cvpoints;
+    calcOpticalFlowPyrLK(*pb, *pa, next_cvpoints, reverse_pts, reverse_status, reverse_err,
+                         Size(21, 21), (int)level_num(),
+                         TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 30, 0.01),
+                         OPTFLOW_USE_INITIAL_FLOW);
+    for (size_t i = 0; i < reverse_status.size(); ++i) {
+        if (result_status[i] &&
+            (!reverse_status[i] || cv::norm(curr_cvpoints[i] - reverse_pts[i]) > 0.5))
+            result_status[i] = 0;
+    }
+    for (size_t i = 0; i < curr_keypoints.size(); ++i) {
+        if (result_status[i]) {
+            next_keypoints[i].x() = next_cvpoints[i].x;
+            next_keypoints[i].y() = next_cvpoints[i].y;
+        }
+    }
+}
+
 void OpenCvImage::preprocess(double clipLimit, int width, int height) {
     PW_ZONE("frontend.cpu.clahe_and_pyramid");
     clahe(clipLimit, width, height)->apply(image, image);

@@ -87,6 +87,14 @@ class YamlConfig : public Config {
     double parsac_norm_scale() const override;
     size_t parsac_keyframe_check_size() const override;
 
+    bool tracking_recovery_enable() const override;
+    bool tracking_recovery_long_term_reset() const override;
+    size_t tracking_recovery_min_tracked_landmarks() const override;
+    double tracking_recovery_lost_timeout() const override;
+    double tracking_recovery_min_map_age() const override;
+    double tracking_recovery_search_radius_px() const override;
+    double tracking_recovery_search_reference_focal() const override;
+
     double rotation_misalignment_threshold() const override;
     double rotation_ransac_threshold() const override;
 
@@ -145,6 +153,14 @@ class YamlConfig : public Config {
     double m_parsac_threshold;
     double m_parsac_norm_scale;
     size_t m_parsac_keyframe_check_size;
+
+    bool m_tracking_recovery_enable;
+    bool m_tracking_recovery_long_term_reset;
+    size_t m_tracking_recovery_min_tracked_landmarks;
+    double m_tracking_recovery_lost_timeout;
+    double m_tracking_recovery_min_map_age;
+    double m_tracking_recovery_search_radius_px;
+    double m_tracking_recovery_search_reference_focal;
 
     double m_rotation_misalignment_threshold;
     double m_rotation_ransac_threshold;

@@ -119,6 +119,17 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
     m_parsac_dynamic_probability = Config::parsac_dynamic_probability();
     m_parsac_threshold = Config::parsac_threshold();
     m_parsac_norm_scale = Config::parsac_norm_scale();
+    m_tracking_recovery_enable = Config::tracking_recovery_enable();
+    m_tracking_recovery_long_term_reset =
+        Config::tracking_recovery_long_term_reset();
+    m_tracking_recovery_min_tracked_landmarks =
+        Config::tracking_recovery_min_tracked_landmarks();
+    m_tracking_recovery_lost_timeout = Config::tracking_recovery_lost_timeout();
+    m_tracking_recovery_min_map_age = Config::tracking_recovery_min_map_age();
+    m_tracking_recovery_search_radius_px =
+        Config::tracking_recovery_search_radius_px();
+    m_tracking_recovery_search_reference_focal =
+        Config::tracking_recovery_search_reference_focal();
 
     m_rotation_misalignment_threshold =
         Config::rotation_misalignment_threshold();
@@ -364,6 +375,36 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
         assign(m_parsac_keyframe_check_size, node);
     }
 
+    // [pw 2026-09-23] Tracking-loss recovery (sliding_window_tracker.h). All keys optional;
+    // an absent `tracking_recovery` block keeps every default, i.e. the feature OFF.
+    if (auto node = find_node(slam_config, "tracking_recovery.enable", false)) {
+        assign(m_tracking_recovery_enable, node);
+    }
+    if (auto node = find_node(slam_config, "tracking_recovery.long_term_reset",
+                              false)) {
+        assign(m_tracking_recovery_long_term_reset, node);
+    }
+    if (auto node = find_node(slam_config,
+                              "tracking_recovery.min_tracked_landmarks", false)) {
+        assign(m_tracking_recovery_min_tracked_landmarks, node);
+    }
+    if (auto node =
+            find_node(slam_config, "tracking_recovery.lost_timeout", false)) {
+        assign(m_tracking_recovery_lost_timeout, node);
+    }
+    if (auto node =
+            find_node(slam_config, "tracking_recovery.min_map_age", false)) {
+        assign(m_tracking_recovery_min_map_age, node);
+    }
+    if (auto node = find_node(slam_config, "tracking_recovery.search_radius_px",
+                              false)) {
+        assign(m_tracking_recovery_search_radius_px, node);
+    }
+    if (auto node = find_node(slam_config,
+                              "tracking_recovery.search_reference_focal", false)) {
+        assign(m_tracking_recovery_search_reference_focal, node);
+    }
+
     if (auto node =
             find_node(slam_config, "rotation.misalignment_threshold", false)) {
         assign(m_rotation_misalignment_threshold, node);
@@ -545,6 +586,34 @@ double YamlConfig::parsac_norm_scale() const { return m_parsac_norm_scale; }
 
 size_t YamlConfig::parsac_keyframe_check_size() const {
     return m_parsac_keyframe_check_size;
+}
+
+bool YamlConfig::tracking_recovery_enable() const {
+    return m_tracking_recovery_enable;
+}
+
+bool YamlConfig::tracking_recovery_long_term_reset() const {
+    return m_tracking_recovery_long_term_reset;
+}
+
+size_t YamlConfig::tracking_recovery_min_tracked_landmarks() const {
+    return m_tracking_recovery_min_tracked_landmarks;
+}
+
+double YamlConfig::tracking_recovery_lost_timeout() const {
+    return m_tracking_recovery_lost_timeout;
+}
+
+double YamlConfig::tracking_recovery_min_map_age() const {
+    return m_tracking_recovery_min_map_age;
+}
+
+double YamlConfig::tracking_recovery_search_radius_px() const {
+    return m_tracking_recovery_search_radius_px;
+}
+
+double YamlConfig::tracking_recovery_search_reference_focal() const {
+    return m_tracking_recovery_search_reference_focal;
 }
 
 double YamlConfig::rotation_misalignment_threshold() const {

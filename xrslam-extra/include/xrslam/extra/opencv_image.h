@@ -30,6 +30,11 @@ class OpenCvImage : public Image {
                          const std::vector<vector<2>> &curr_keypoints,
                          std::vector<vector<2>> &next_keypoints,
                          std::vector<char> &result_status) const override;
+    void track_keypoints_guided(const Image *next_image,
+                                const std::vector<vector<2>> &curr_keypoints,
+                                std::vector<vector<2>> &next_keypoints,
+                                std::vector<char> &result_status,
+                                double max_offset) const override;
 
     void preprocess(double clipLimit, int width, int height) override;
     void correct_distortion(const matrix<3> &intrinsics,

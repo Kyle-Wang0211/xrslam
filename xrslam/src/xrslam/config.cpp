@@ -78,6 +78,30 @@ double Config::parsac_norm_scale() const { return 1.0; }
 
 size_t Config::parsac_keyframe_check_size() const { return 3; }
 
+// [pw 2026-09-23] Tracking-loss recovery defaults. Sources are cited in sliding_window_tracker.h.
+bool Config::tracking_recovery_enable() const { return false; }
+
+// Paper stages [P3]/[P4] (new map after 5 s lost / map discarded when lost < 15 s after IMU
+// init). OFF by default: with it off, recovery never resets the map (see the .h).
+bool Config::tracking_recovery_long_term_reset() const { return false; }
+
+// ORB-SLAM3 Sec. V-D p.8: "enters into visually lost state when less than 15 point maps are tracked"
+size_t Config::tracking_recovery_min_tracked_landmarks() const { return 15; }
+
+// ORB-SLAM3 Sec. V-D p.8: "Otherwise, after 5 seconds, we pass to the next stage."
+double Config::tracking_recovery_lost_timeout() const { return 5.0; }
+
+// ORB-SLAM3 Sec. V-D p.9: "If the system gets lost within 15 seconds after IMU initialization,
+// the map is discarded."
+double Config::tracking_recovery_min_map_age() const { return 15.0; }
+
+// ORB-SLAM3 source (read only), Tracking.cc:3410-3411 th = 15 while (RECENTLY_)LOST, times
+// ORBmatcher.cc:215-220 RadiusByViewingCos = 4.0 px (the non-frontal case) = 60 px at octave 0.
+double Config::tracking_recovery_search_radius_px() const { return 60.0; }
+
+// <= 0 keeps the radius in bare pixels (same convention as sliding_window_rpe_reference_focal).
+double Config::tracking_recovery_search_reference_focal() const { return 0.0; }
+
 size_t Config::sliding_window_tracker_frequent() const { return 1; }
 
 void Config::log_config() const {
@@ -215,6 +239,21 @@ void Config::log_config() const {
     ss << "Config::parsac_threshold: " << parsac_threshold() << std::endl;
 
     ss << "Config::parsac_norm_scale: " << parsac_norm_scale() << std::endl;
+
+    ss << "Config::tracking_recovery_enable: " << tracking_recovery_enable()
+       << std::endl;
+    ss << "Config::tracking_recovery_long_term_reset: "
+       << tracking_recovery_long_term_reset() << std::endl;
+    ss << "Config::tracking_recovery_min_tracked_landmarks: "
+       << tracking_recovery_min_tracked_landmarks() << std::endl;
+    ss << "Config::tracking_recovery_lost_timeout: "
+       << tracking_recovery_lost_timeout() << std::endl;
+    ss << "Config::tracking_recovery_min_map_age: "
+       << tracking_recovery_min_map_age() << std::endl;
+    ss << "Config::tracking_recovery_search_radius_px: "
+       << tracking_recovery_search_radius_px() << std::endl;
+    ss << "Config::tracking_recovery_search_reference_focal: "
+       << tracking_recovery_search_reference_focal() << std::endl;
 
     ss << "Config::rotation_misalignment_threshold: "
        << rotation_misalignment_threshold() << std::endl;

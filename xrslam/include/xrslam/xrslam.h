@@ -149,6 +149,19 @@ class Config {
     virtual double parsac_norm_scale() const;
     virtual size_t parsac_keyframe_check_size() const;
 
+    /// [pw 2026-09-23] Short-term tracking-loss recovery ("A-level"), replicated from the
+    /// published ORB-SLAM3 behaviour (Campos et al., IEEE T-RO 2021, arXiv 2007.11898v2,
+    /// Sec. V-D "Robustness to tracking loss", pp. 8-9). The full recipe, with a citation
+    /// for every threshold and transition, is in sliding_window_tracker.h.
+    /// enable() == false (the default) keeps the pre-existing code path byte for byte.
+    virtual bool tracking_recovery_enable() const;
+    virtual bool tracking_recovery_long_term_reset() const;
+    virtual size_t tracking_recovery_min_tracked_landmarks() const;
+    virtual double tracking_recovery_lost_timeout() const;
+    virtual double tracking_recovery_min_map_age() const;
+    virtual double tracking_recovery_search_radius_px() const;
+    virtual double tracking_recovery_search_reference_focal() const;
+
     void log_config() const;
 };
 
@@ -183,9 +196,36 @@ class Image {
                                  const std::vector<vector<2>> &curr_keypoints,
                                  std::vector<vector<2>> &next_keypoints,
                                  std::vector<char> &result_status) const = 0;
+
+    /// [pw 2026-09-23] Guided search for tracking-loss recovery (sliding_window_tracker.h).
+    /// Same matcher as track_keypoints(), but `next_keypoints` MUST hold the predicted
+    /// positions, and its frame-to-frame motion gate (|next - curr| <= rows/4, which assumes
+    /// consecutive frames) is replaced by a window of `max_offset` pixels around the
+    /// prediction. The default reports every point as not found, so an image type without an
+    /// implementation simply never re-finds anything. Only called with recovery on.
+    virtual void track_keypoints_guided(const Image *next_image,
+                                        const std::vector<vector<2>> &curr_keypoints,
+                                        std::vector<vector<2>> &next_keypoints,
+                                        std::vector<char> &result_status,
+                                        double max_offset) const {
+        (void)next_image;
+        (void)next_keypoints;
+        (void)max_offset;
+        result_status.assign(curr_keypoints.size(), 0);
+    }
 };
 
-enum SysState { SYS_INITIALIZING = 0, SYS_TRACKING, SYS_CRASH, SYS_UNKNOWN };
+// [pw 2026-09-23] SYS_TRACKING_LOST is appended (existing values unchanged). It is only ever
+// reported with tracking_recovery_enable() on, while the tracker is in the ORB-SLAM3
+// "short-term lost" state (IMU-only pose, searching the retained map); see
+// sliding_window_tracker.h.
+enum SysState {
+    SYS_INITIALIZING = 0,
+    SYS_TRACKING,
+    SYS_CRASH,
+    SYS_UNKNOWN,
+    SYS_TRACKING_LOST
+};
 
 // The following interfaces will be deprecated
 class XRSLAM {
