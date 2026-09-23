@@ -18,14 +18,26 @@
 // 输出 TUM(timestamp tx ty tz qx qy qz qw),body 位姿(与主树 runner 的 GetBodyPose 同义),
 // 未初始化时 GetResult 给零四元数 ⇒ 跳过;时间戳不严格前进 ⇒ 跳过(同主树 TryGetLatestPose 闸)。
 //
+// [2026-09-23 solver time budget] --timing-csv <path>:逐帧计时(只读,不改轨迹)。
+//   一「帧周期」= 从这一帧 PushSensorData(CAMERA) 起、到下一帧 CAMERA 之前,本 runner
+//   对引擎 C API 的全部调用(Push*/RunOneFrame/GetResult)的墙钟之和。threading OFF 时
+//   整条流水线(前端 + 滑窗)都同步跑在这些调用里,所以它就是这一帧的算力延迟;
+//   读数据集/解 PNG 不计入。另外对引擎导出的遥测计数器(solver.cpp 的 pw_solver_*、
+//   frontend_worker.cpp 的 pw_bk_*)取逐帧差分 —— 用 dlsym 找,找不到(比如未改动的
+//   引擎)就留空,所以同一个 runner 也能对着旧库跑。
+//
 //   pw_euroc_runner <slam.yaml> <device.yaml> euroc://<dir> <out.tum> [--intrinsics-csv k.csv]
+//                   [--timing-csv timing.csv]
 
 #include "dataset_reader.h"
 #include <XRSLAM.h>
 #include <xrslam/extra/yaml_config.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <dlfcn.h>
+#include <time.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -92,6 +104,63 @@ const KRow *match_k(const std::vector<KRow> &rows, double t) {
     return best;
 }
 
+// ---- [2026-09-23] 逐帧计时 -------------------------------------------------------------
+using Clock = std::chrono::steady_clock;
+
+struct Telemetry {
+    // solver.cpp(本分支新增);旧库没有 ⇒ nullptr
+    const std::atomic<unsigned long long> *scoped_ns = nullptr, *scoped_calls = nullptr,
+                                          *scoped_iters = nullptr, *unscoped_ns = nullptr,
+                                          *stop_budget = nullptr, *stop_time = nullptr,
+                                          *stop_iter = nullptr, *stop_conv = nullptr;
+    // frontend_worker.cpp:23-29(已有)
+    const double *bk_work_ms = nullptr, *bk_track_ms = nullptr;
+    const unsigned long long *bk_track_n = nullptr;
+
+    template <typename T> static const T *sym(const char *name) {
+        return static_cast<const T *>(dlsym(RTLD_DEFAULT, name));
+    }
+    void bind() {
+        using A = std::atomic<unsigned long long>;
+        scoped_ns = sym<A>("pw_solver_scoped_ns");
+        scoped_calls = sym<A>("pw_solver_scoped_calls");
+        scoped_iters = sym<A>("pw_solver_scoped_iterations");
+        unscoped_ns = sym<A>("pw_solver_unscoped_ns");
+        stop_budget = sym<A>("pw_solver_stop_budget");
+        stop_time = sym<A>("pw_solver_stop_time_limit");
+        stop_iter = sym<A>("pw_solver_stop_iter_limit");
+        stop_conv = sym<A>("pw_solver_stop_converged");
+        bk_work_ms = sym<double>("pw_bk_work_ms");
+        bk_track_ms = sym<double>("pw_bk_track_ms");
+        bk_track_n = sym<unsigned long long>("pw_bk_track_n");
+    }
+};
+
+struct Snap {
+    double scoped_ms = NAN, unscoped_ms = NAN, bk_work_ms = NAN, bk_track_ms = NAN;
+    long long scoped_calls = -1, scoped_iters = -1, stop_budget = -1, stop_time = -1,
+              stop_iter = -1, stop_conv = -1, bk_track_n = -1;
+};
+
+Snap take(const Telemetry &tm) {
+    Snap s;
+    auto a = [](const std::atomic<unsigned long long> *p) -> long long {
+        return p ? (long long)p->load(std::memory_order_relaxed) : -1;
+    };
+    if (tm.scoped_ns) s.scoped_ms = tm.scoped_ns->load() * 1e-6;
+    if (tm.unscoped_ns) s.unscoped_ms = tm.unscoped_ns->load() * 1e-6;
+    if (tm.bk_work_ms) s.bk_work_ms = *tm.bk_work_ms;
+    if (tm.bk_track_ms) s.bk_track_ms = *tm.bk_track_ms;
+    s.scoped_calls = a(tm.scoped_calls);
+    s.scoped_iters = a(tm.scoped_iters);
+    s.stop_budget = a(tm.stop_budget);
+    s.stop_time = a(tm.stop_time);
+    s.stop_iter = a(tm.stop_iter);
+    s.stop_conv = a(tm.stop_conv);
+    s.bk_track_n = tm.bk_track_n ? (long long)*tm.bk_track_n : -1;
+    return s;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -106,11 +175,65 @@ int main(int argc, char **argv) {
     const std::string dev_cfg_path = argv[2];
     const std::string data_path = argv[3];
     const std::string out_tum = argv[4];
-    std::string k_csv;
+    std::string k_csv, timing_csv;
     for (int i = 5; i + 1 < argc; ++i) {
         if (std::string(argv[i]) == "--intrinsics-csv")
             k_csv = argv[i + 1];
+        if (std::string(argv[i]) == "--timing-csv")
+            timing_csv = argv[i + 1];
     }
+    Telemetry tm;
+    tm.bind();
+    FILE *tf = nullptr;
+    if (!timing_csv.empty()) {
+        tf = fopen(timing_csv.c_str(), "w");
+        if (!tf) {
+            fprintf(stderr, "cannot write %s\n", timing_csv.c_str());
+            return EXIT_FAILURE;
+        }
+        fprintf(tf, "frame,t,wall_ms,cpu_ms,sw_solver_ms,sw_solves,sw_iters,stop_budget,stop_time,"
+                    "stop_iter,stop_conv,init_solver_ms,bk_work_ms,bk_track_ms,bk_track_n\n");
+        fprintf(stderr, "[timing] 遥测 %s / %s\n",
+                tm.scoped_ns ? "pw_solver_* 有" : "pw_solver_* 无(旧库)",
+                tm.bk_work_ms ? "pw_bk_* 有" : "pw_bk_* 无");
+    }
+    // 当前帧周期的累计
+    long period_frame = -1;
+    double period_t = 0.0, period_wall_ms = 0.0, period_cpu_ms = 0.0;
+    Snap period_start;
+    auto flush_period = [&]() {
+        if (!tf || period_frame < 0)
+            return;
+        Snap e = take(tm);
+        auto dl = [](long long b, long long a) { return (a < 0 || b < 0) ? -1LL : b - a; };
+        fprintf(tf, "%ld,%.9f,%.4f,%.4f,%.4f,%lld,%lld,%lld,%lld,%lld,%lld,%.4f,%.4f,%.4f,%lld\n",
+                period_frame, period_t, period_wall_ms, period_cpu_ms,
+                e.scoped_ms - period_start.scoped_ms,
+                dl(e.scoped_calls, period_start.scoped_calls),
+                dl(e.scoped_iters, period_start.scoped_iters),
+                dl(e.stop_budget, period_start.stop_budget),
+                dl(e.stop_time, period_start.stop_time),
+                dl(e.stop_iter, period_start.stop_iter),
+                dl(e.stop_conv, period_start.stop_conv),
+                e.unscoped_ms - period_start.unscoped_ms,
+                e.bk_work_ms - period_start.bk_work_ms, e.bk_track_ms - period_start.bk_track_ms,
+                dl(e.bk_track_n, period_start.bk_track_n));
+    };
+    // 包住每一次引擎调用,墙钟与本线程 CPU 时间都计入当前帧周期。
+    // CPU 时间不受别的进程抢核影响(机器被别的任务压满时墙钟会虚高),用来对照墙钟;
+    // 但 Ceres 的预算判据本身用的是墙钟(trust_region_minimizer.cc WallTimeInSeconds)。
+    auto thread_cpu_ms = [] {
+        timespec ts;
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+        return ts.tv_sec * 1e3 + ts.tv_nsec * 1e-6;
+    };
+    auto timed = [&](auto &&fn) {
+        const double u0 = thread_cpu_ms();
+        const auto c0 = Clock::now();
+        fn();
+        period_wall_ms += std::chrono::duration<double, std::milli>(Clock::now() - c0).count();
+        period_cpu_ms += thread_cpu_ms() - u0;
+    };
 
     // 本树 XRSLAM_IOS=OFF ⇒ 两个参数是 yaml **文件路径**(yaml_config.cpp:133-148)。
     void *yaml_config = nullptr;
@@ -154,13 +277,15 @@ int main(int argc, char **argv) {
         case DatasetReader::GYROSCOPE: {
             auto [t, g] = reader->read_gyroscope();
             (void)t;
-            XRSLAMPushSensorData(XRSLAM_SENSOR_GYROSCOPE, &g);
+            auto *gp = &g; // C++17 lambda 不能捕获结构化绑定
+            timed([&] { XRSLAMPushSensorData(XRSLAM_SENSOR_GYROSCOPE, gp); });
             ++n_gyro;
         } break;
         case DatasetReader::ACCELEROMETER: {
             auto [t, a] = reader->read_accelerometer();
             (void)t;
-            XRSLAMPushSensorData(XRSLAM_SENSOR_ACCELERATION, &a);
+            auto *ap = &a; // C++17 lambda 不能捕获结构化绑定
+            timed([&] { XRSLAMPushSensorData(XRSLAM_SENSOR_ACCELERATION, ap); });
             ++n_acc;
         } break;
         case DatasetReader::CAMERA: {
@@ -198,12 +323,19 @@ int main(int argc, char **argv) {
                 return EXIT_FAILURE;
             }
 #endif
-            XRSLAMPushSensorData(XRSLAM_SENSOR_CAMERA, &img);
+            flush_period(); // 上一帧周期到此结束
+            period_frame = n_img;
+            period_t = t;
+            period_wall_ms = 0.0;
+            period_cpu_ms = 0.0;
+            if (tf)
+                period_start = take(tm);
+            timed([&] { XRSLAMPushSensorData(XRSLAM_SENSOR_CAMERA, &img); });
             ++n_img;
-            XRSLAMRunOneFrame();
+            timed([&] { XRSLAMRunOneFrame(); });
 
             XRSLAMPose pose{};
-            XRSLAMGetResult(XRSLAM_RESULT_BODY_POSE, &pose);
+            timed([&] { XRSLAMGetResult(XRSLAM_RESULT_BODY_POSE, &pose); });
             const double qn = std::sqrt(pose.quaternion[0] * pose.quaternion[0] +
                                         pose.quaternion[1] * pose.quaternion[1] +
                                         pose.quaternion[2] * pose.quaternion[2] +
@@ -226,10 +358,19 @@ int main(int argc, char **argv) {
     }
     const double wall_s =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+    flush_period();
+    if (tf)
+        fclose(tf);
 
     XRSLAMIntrinsics reported{};
     XRSLAMGetResult(XRSLAM_INFO_INTRINSICS, &reported);
     XRSLAMDestroy();
+    // [2026-09-23] 上游 player 的 EurocDatasetReader 把 XRSLAMCreate 交出的**非拥有**裸指针
+    // 包进 shared_ptr(xrslam-pc/player/src/IO/euroc_dataset_reader.cpp:6-7),而
+    // XRSLAMDestroy 已经释放过同一个 YamlConfig ⇒ reader 析构时二次释放,进程退出码 139
+    // (未改动的 04c0e83 runner 同样如此,崩在 main 返回之后、输出已写完)。
+    // 这里故意泄漏 reader,只为让退出码可信;对轨迹无任何影响。
+    (void)reader.release();
 
     if (!krows.empty()) {
         const long total = n_k_matched + n_k_unmatched;
