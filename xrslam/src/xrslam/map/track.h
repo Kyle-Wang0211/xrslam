@@ -17,7 +17,12 @@ enum TrackTag : int {
     TT_TRASH,
     TT_STATIC,
     TT_OUTLIER,
-    TT_TEMP
+    TT_TEMP,
+    // [pw 2026-09-23] Set only by tracking-loss recovery (sliding_window_tracker.h), on the
+    // feature-tracking-map track of a keypoint that was re-associated with a retained map
+    // point. Frame::track_keypoints gives such tracks precedence in its Poisson-disk
+    // thinning so the re-found map point keeps being tracked. Never set when recovery is off.
+    TT_PW_RECOVERED
 };
 
 class Track : public Tagged<TrackTag>, public Identifiable<Track> {

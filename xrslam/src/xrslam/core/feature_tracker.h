@@ -49,7 +49,23 @@ class FeatureTracker : public Worker {
     std::shared_ptr<Map> map;
     std::unique_ptr<Map> keymap;
 
+    // [pw 2026-09-23] Tracking-loss recovery (sliding_window_tracker.h, "reference image").
+    // work() releases every frame's pixel buffers as soon as it has tracked the next frame
+    // (see the release_image_buffer() call in feature_tracker.cpp). The recovery search needs
+    // the pixels of the last well-tracked frame for up to lost_timeout seconds, so the backend
+    // may exempt exactly one image from that release. Both calls must be made while holding
+    // this->map's lock (the same lock work() releases under); nothing else is needed for
+    // thread safety. Unused (always null) unless tracking_recovery_enable() is on, in which
+    // case work() behaves exactly as before.
+    void pw_pin_reference_image(std::shared_ptr<Image> image);
+    void pw_unpin_reference_image();
+    // Drops the pose this tracker hands to Detail::predict_pose, as the existing
+    // "SWT cannot catch up" path does; used when recovery gives up and the map is reset, so
+    // that no dead-reckoned pose is reported while the system re-initialises.
+    void pw_reset_latest_state();
+
   private:
+    std::shared_ptr<Image> pw_pinned_image;
     XRSLAM::Detail *detail;
     std::deque<std::unique_ptr<Frame>> frames;
     std::atomic<size_t> pending_count_{0};

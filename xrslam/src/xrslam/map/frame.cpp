@@ -142,7 +142,11 @@ void Frame::track_keypoints(Frame *next_frame, Config *config) {
         Track *track = get_track(i);
         if (track == nullptr)
             continue;
-        keypoint_index_track_length.emplace_back(i, track->keypoint_num());
+        // [pw 2026-09-23] TT_PW_RECOVERED is only ever set by tracking-loss recovery; without
+        // it the key is keypoint_num() exactly as before.
+        keypoint_index_track_length.emplace_back(
+            i, track->tag(TT_PW_RECOVERED) ? std::numeric_limits<size_t>::max()
+                                           : track->keypoint_num());
     }
 
     std::sort(keypoint_index_track_length.begin(),

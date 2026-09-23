@@ -135,7 +135,9 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
                 lk.unlock();
 #endif
             }
-            last_frame->image->release_image_buffer();
+            // [pw 2026-09-23] pw_pinned_image is null unless tracking recovery is on.
+            if (last_frame->image != pw_pinned_image)
+                last_frame->image->release_image_buffer();
         }
 
         if (slidind_window_frame_tag) {
@@ -176,6 +178,28 @@ void FeatureTracker::track_frame(std::unique_ptr<Frame> frame) {
     frames.emplace_back(std::move(frame));
     pending_count_.store(frames.size(), std::memory_order_relaxed);
     resume(l);
+}
+
+void FeatureTracker::pw_pin_reference_image(std::shared_ptr<Image> image) {
+    // Caller holds map's lock. The previously pinned image has already been passed by work()
+    // (it belongs to an older frame than the one being pinned), which skipped releasing it; so
+    // it is released here, unless it is still the newest frame in the tracking map, which
+    // work() will release itself when it moves on.
+    if (pw_pinned_image && pw_pinned_image != image) {
+        const bool still_newest =
+            map->frame_num() > 0 &&
+            map->get_frame(map->frame_num() - 1)->image == pw_pinned_image;
+        if (!still_newest)
+            pw_pinned_image->release_image_buffer();
+    }
+    pw_pinned_image = std::move(image);
+}
+
+void FeatureTracker::pw_unpin_reference_image() { pw_pin_reference_image(nullptr); }
+
+void FeatureTracker::pw_reset_latest_state() {
+    std::unique_lock lk(latest_pose_mutex);
+    latest_state.reset();
 }
 
 std::optional<std::tuple<double, PoseState, MotionState>>
