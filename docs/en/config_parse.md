@@ -56,6 +56,8 @@ The following is the parameter description of the PC configuration, include [sla
 
 * `iteration_limit`: the maxmium number of iteration for each optimization
 * `time_limit`: the maxmium time which optimizer cost for each optimization
+* `frame_time_budget` *(pw fork, optional)*: per-frame wall-clock budget [s] shared by the sliding-window solves of one frame, replicated from OKVIS (`ceres_options.timeLimit`, BSD-3; see `xrslam/src/xrslam/estimation/ceres/okvis_iteration_callback.h`). Negative or absent = off (pre-change behaviour, byte-identical)
+* `min_iterations` *(pw fork, optional)*: iterations always performed regardless of `frame_time_budget` (OKVIS `minIterations`, default 3); only read when the budget is on
 
 ### parsac
 * `parsac_flag`: use imu-parsac or not

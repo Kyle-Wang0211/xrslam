@@ -137,6 +137,27 @@ class Config {
 
     virtual size_t solver_iteration_limit() const;
     virtual double solver_time_limit() const;
+    /// [pw 2026-09-23] Per-frame optimisation budget, replicated from OKVIS
+    /// (BSD-3; see estimation/ceres/okvis_iteration_callback.h and Solver::solve()).
+    ///
+    /// `solver_frame_time_budget()` is OKVIS's `ceres_options.timeLimit`
+    /// (config_fpga_p2_euroc.yaml:62 ships 0.035 s): the wall-clock budget, in
+    /// seconds, for the sliding-window estimation of ONE frame. Every solve inside
+    /// SlidingWindowTracker::track() gets `budget - (time already spent on this
+    /// frame)`, clamped at 0 (ThreadedKFVio.cpp:527-530), and stops at the first
+    /// iteration boundary where OKVIS's rule predicts an overrun.
+    /// A NEGATIVE value (the default) registers no callback at all, i.e. the solver
+    /// is byte-for-byte the pre-change one; OKVIS uses the same convention
+    /// ("negative values will set an unlimited time limit", yaml:62;
+    /// VioParametersReader.cpp:127 defaults to -1.0).
+    ///
+    /// `solver_min_iterations()` is OKVIS's `ceres_options.minIterations`
+    /// (yaml:60 ships 3): iterations always performed regardless of the budget.
+    /// Ceres only checks at iteration boundaries, so this bounds the tail
+    /// statistically, not as a hard real-time guarantee.
+    /// `solver_time_limit()` / `solver_iteration_limit()` above keep applying on top.
+    virtual double solver_frame_time_budget() const;
+    virtual size_t solver_min_iterations() const;
 
     virtual double rotation_misalignment_threshold() const;
     virtual double rotation_ransac_threshold() const;

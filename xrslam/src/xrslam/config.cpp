@@ -62,6 +62,13 @@ size_t Config::solver_iteration_limit() const { return 10; }
 
 double Config::solver_time_limit() const { return 1.0e6; }
 
+// [pw 2026-09-23] < 0 = off (no callback registered, pre-change behaviour).
+double Config::solver_frame_time_budget() const { return -1.0; }
+
+// OKVIS config_fpga_p2_euroc.yaml:60 `minIterations: 3`. Only read when the
+// budget above is >= 0.
+size_t Config::solver_min_iterations() const { return 3; }
+
 double Config::rotation_misalignment_threshold() const { return 0.1; }
 
 double Config::rotation_ransac_threshold() const { return 10; }
@@ -206,6 +213,12 @@ void Config::log_config() const {
        << std::endl;
 
     ss << "Config::solver_time_limit: " << solver_time_limit() << std::endl;
+
+    ss << "Config::solver_frame_time_budget: " << solver_frame_time_budget()
+       << std::endl;
+
+    ss << "Config::solver_min_iterations: " << solver_min_iterations()
+       << std::endl;
 
     ss << "Config::parsac_flag: " << parsac_flag() << std::endl;
 

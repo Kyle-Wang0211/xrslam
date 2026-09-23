@@ -114,6 +114,8 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
     m_initializer_refine_imu = Config::initializer_refine_imu();
     m_solver_iteration_limit = Config::solver_iteration_limit();
     m_solver_time_limit = Config::solver_time_limit();
+    m_solver_frame_time_budget = Config::solver_frame_time_budget();
+    m_solver_min_iterations = Config::solver_min_iterations();
 
     m_parsac_flag = Config::parsac_flag();
     m_parsac_dynamic_probability = Config::parsac_dynamic_probability();
@@ -342,6 +344,16 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
         assign(m_solver_time_limit, node);
     }
 
+    // [pw 2026-09-23] OKVIS per-frame budget; absent key = off. See xrslam.h.
+    if (auto node =
+            find_node(slam_config, "solver.frame_time_budget", false)) {
+        assign(m_solver_frame_time_budget, node);
+    }
+
+    if (auto node = find_node(slam_config, "solver.min_iterations", false)) {
+        assign(m_solver_min_iterations, node);
+    }
+
     if (auto node = find_node(slam_config, "parsac.parsac_flag", false)) {
         assign(m_parsac_flag, node);
     }
@@ -532,6 +544,14 @@ size_t YamlConfig::solver_iteration_limit() const {
 }
 
 double YamlConfig::solver_time_limit() const { return m_solver_time_limit; }
+
+double YamlConfig::solver_frame_time_budget() const {
+    return m_solver_frame_time_budget;
+}
+
+size_t YamlConfig::solver_min_iterations() const {
+    return m_solver_min_iterations;
+}
 
 bool YamlConfig::parsac_flag() const { return m_parsac_flag; }
 

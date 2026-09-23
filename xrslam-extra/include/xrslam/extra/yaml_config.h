@@ -80,6 +80,8 @@ class YamlConfig : public Config {
 
     size_t solver_iteration_limit() const override;
     double solver_time_limit() const override;
+    double solver_frame_time_budget() const override;
+    size_t solver_min_iterations() const override;
 
     bool parsac_flag() const override;
     double parsac_dynamic_probability() const override;
@@ -139,6 +141,8 @@ class YamlConfig : public Config {
 
     size_t m_solver_iteration_limit;
     double m_solver_time_limit;
+    double m_solver_frame_time_budget;
+    size_t m_solver_min_iterations;
 
     bool m_parsac_flag;
     double m_parsac_dynamic_probability;
