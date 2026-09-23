@@ -33,6 +33,7 @@ set(PRIVATE_HEADERS
   ${XRSLAM_SOURCE_DIR}/xrslam/core/sliding_window_tracker.h
   ${XRSLAM_SOURCE_DIR}/xrslam/estimation/ceres/cost_function_validator.h
   ${XRSLAM_SOURCE_DIR}/xrslam/estimation/ceres/marginalization_factor.h
+  ${XRSLAM_SOURCE_DIR}/xrslam/estimation/ceres/okvis_iteration_callback.h
   ${XRSLAM_SOURCE_DIR}/xrslam/estimation/ceres/preintegration_factor.h
   ${XRSLAM_SOURCE_DIR}/xrslam/estimation/ceres/quaternion_parameterization.h
   ${XRSLAM_SOURCE_DIR}/xrslam/estimation/ceres/reprojection_factor.h
