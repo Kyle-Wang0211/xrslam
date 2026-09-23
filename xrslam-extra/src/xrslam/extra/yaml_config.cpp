@@ -124,6 +124,8 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
         Config::tracking_recovery_long_term_reset();
     m_tracking_recovery_min_tracked_landmarks =
         Config::tracking_recovery_min_tracked_landmarks();
+    m_tracking_recovery_recover_tracked_landmarks_above =
+        Config::tracking_recovery_recover_tracked_landmarks_above();
     m_tracking_recovery_lost_timeout = Config::tracking_recovery_lost_timeout();
     m_tracking_recovery_min_map_age = Config::tracking_recovery_min_map_age();
     m_tracking_recovery_search_radius_px =
@@ -388,6 +390,11 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
                               "tracking_recovery.min_tracked_landmarks", false)) {
         assign(m_tracking_recovery_min_tracked_landmarks, node);
     }
+    if (auto node = find_node(slam_config,
+                              "tracking_recovery.recover_tracked_landmarks_above",
+                              false)) {
+        assign(m_tracking_recovery_recover_tracked_landmarks_above, node);
+    }
     if (auto node =
             find_node(slam_config, "tracking_recovery.lost_timeout", false)) {
         assign(m_tracking_recovery_lost_timeout, node);
@@ -598,6 +605,10 @@ bool YamlConfig::tracking_recovery_long_term_reset() const {
 
 size_t YamlConfig::tracking_recovery_min_tracked_landmarks() const {
     return m_tracking_recovery_min_tracked_landmarks;
+}
+
+size_t YamlConfig::tracking_recovery_recover_tracked_landmarks_above() const {
+    return m_tracking_recovery_recover_tracked_landmarks_above;
 }
 
 double YamlConfig::tracking_recovery_lost_timeout() const {

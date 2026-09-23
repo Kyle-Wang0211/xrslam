@@ -90,6 +90,7 @@ class YamlConfig : public Config {
     bool tracking_recovery_enable() const override;
     bool tracking_recovery_long_term_reset() const override;
     size_t tracking_recovery_min_tracked_landmarks() const override;
+    size_t tracking_recovery_recover_tracked_landmarks_above() const override;
     double tracking_recovery_lost_timeout() const override;
     double tracking_recovery_min_map_age() const override;
     double tracking_recovery_search_radius_px() const override;
@@ -157,6 +158,7 @@ class YamlConfig : public Config {
     bool m_tracking_recovery_enable;
     bool m_tracking_recovery_long_term_reset;
     size_t m_tracking_recovery_min_tracked_landmarks;
+    size_t m_tracking_recovery_recover_tracked_landmarks_above;
     double m_tracking_recovery_lost_timeout;
     double m_tracking_recovery_min_map_age;
     double m_tracking_recovery_search_radius_px;

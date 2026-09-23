@@ -157,6 +157,7 @@ class Config {
     virtual bool tracking_recovery_enable() const;
     virtual bool tracking_recovery_long_term_reset() const;
     virtual size_t tracking_recovery_min_tracked_landmarks() const;
+    virtual size_t tracking_recovery_recover_tracked_landmarks_above() const;
     virtual double tracking_recovery_lost_timeout() const;
     virtual double tracking_recovery_min_map_age() const;
     virtual double tracking_recovery_search_radius_px() const;

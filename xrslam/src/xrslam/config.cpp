@@ -88,6 +88,10 @@ bool Config::tracking_recovery_long_term_reset() const { return false; }
 // ORB-SLAM3 Sec. V-D p.8: "enters into visually lost state when less than 15 point maps are tracked"
 size_t Config::tracking_recovery_min_tracked_landmarks() const { return 15; }
 
+// ORB-SLAM3 source (read only), Tracking.cc:3033: while RECENTLY_LOST, TrackLocalMap succeeds
+// with more than 10 inliers (the paper gives only the loss threshold).
+size_t Config::tracking_recovery_recover_tracked_landmarks_above() const { return 10; }
+
 // ORB-SLAM3 Sec. V-D p.8: "Otherwise, after 5 seconds, we pass to the next stage."
 double Config::tracking_recovery_lost_timeout() const { return 5.0; }
 
@@ -246,6 +250,8 @@ void Config::log_config() const {
        << tracking_recovery_long_term_reset() << std::endl;
     ss << "Config::tracking_recovery_min_tracked_landmarks: "
        << tracking_recovery_min_tracked_landmarks() << std::endl;
+    ss << "Config::tracking_recovery_recover_tracked_landmarks_above: "
+       << tracking_recovery_recover_tracked_landmarks_above() << std::endl;
     ss << "Config::tracking_recovery_lost_timeout: "
        << tracking_recovery_lost_timeout() << std::endl;
     ss << "Config::tracking_recovery_min_map_age: "
