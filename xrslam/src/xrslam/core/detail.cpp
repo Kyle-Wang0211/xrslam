@@ -102,7 +102,10 @@ Pose XRSLAM::Detail::track_accelerometer(const double &t, const double &x,
 
 Pose XRSLAM::Detail::track_camera(std::shared_ptr<Image> image) {
     std::unique_ptr<Frame> frame = std::make_unique<Frame>();
-    frame->K = config->camera_intrinsic();
+    // [pw 2026-09-22 逐帧内参] 判决书 §3.1/§3.7 第 4 条:这里是内参进核心的
+    // 唯一注入点。平台给了当帧 K 就用当帧 K,否则沿用 Config 的常量(上游行为)。
+    // 下面的 sqrt_inv_cov 由 frame->K 推出,自然跟着当帧 K 走(判决书 §3.1 :107-109)。
+    frame->K = image->has_K ? image->K : config->camera_intrinsic();
     frame->image = image;
     frame->sqrt_inv_cov = frame->K.block<2, 2>(0, 0);
     frame->sqrt_inv_cov(0, 0) /= ::sqrt(config->keypoint_noise_cov()(0, 0));

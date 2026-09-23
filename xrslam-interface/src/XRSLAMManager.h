@@ -111,6 +111,10 @@ class XRSLAMManager {
     Pose imu_pose_;
     double imu_pose_timestamp_ = 0.0;
     bool imu_pose_valid_ = false;
+    // [pw 2026-09-22 逐帧内参] 最近一帧由 ext 送进来的 K,供 GetInfoIntrinsics 报出。
+    mutable std::mutex intrinsics_mutex_;
+    XRSLAMIntrinsics latest_intrinsics_{};
+    bool has_latest_intrinsics_ = false;
 };
 } // namespace xrslam
 #endif

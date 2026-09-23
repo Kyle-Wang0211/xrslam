@@ -3,6 +3,7 @@
 #endif
 #include <cmath>
 #include "XRSLAMManager.h"
+#include "XRSLAMImageExt.h"   // [pw 2026-09-22] 逐帧内参消费规则 + ABI 静态断言
 #include "xrslam/core/feature_tracker.h"
 #include "xrslam/core/frontend_worker.h"
 
@@ -113,6 +114,10 @@ void XRSLAMManager::Destroy() {
         std::lock_guard<std::mutex> lck(input_mutex_);
         cur_image_.reset();
     }
+    {
+        std::lock_guard<std::mutex> lk(intrinsics_mutex_);
+        has_latest_intrinsics_ = false;   // [pw 2026-09-22] 不让上一会话的逐帧 K 漏到下一会话
+    }
     // XRSLAM::Detail::~Detail() is the upstream owner of worker stop/join.
     detail_.reset();
     config_.reset();
@@ -138,6 +143,25 @@ void XRSLAMManager::PushImage(XRSLAMImage *image) {
         int cols = config_->camera_resolution()[0];
         int rows = config_->camera_resolution()[1];
         opencv_image->t = image->timeStamp;
+        // [pw 2026-09-22 逐帧内参] 判决书 §3.7 第 3 条:把 ext 里的当帧 K 拷进
+        // xrslam::Image,再由 detail.cpp track_camera 注入 frame->K。规则见 XRSLAMImageExt.h;
+        // 拿不到(旧调用者 / ext 为空 / 标志未置)就保持 has_K=false ⇒ 上游行为。
+        {
+            double k4[4];
+            if (xrslam::pw::take_frame_intrinsics(image, k4)) {
+                // 与 yaml_config.cpp:157-161 同一构造:单位阵 + fx fy cx cy,零 skew
+                //(Apple 的 3x3 亦零 skew,判决书 §3.6)。
+                opencv_image->K.setIdentity();
+                opencv_image->K(0, 0) = k4[0];
+                opencv_image->K(1, 1) = k4[1];
+                opencv_image->K(0, 2) = k4[2];
+                opencv_image->K(1, 2) = k4[3];
+                opencv_image->has_K = true;
+                std::lock_guard<std::mutex> lk(intrinsics_mutex_);
+                latest_intrinsics_ = {k4[0], k4[1], k4[2], k4[3]};
+                has_latest_intrinsics_ = true;
+            }
+        }
 
         cv::Mat img;
         if(image->channel == 1){
@@ -322,6 +346,15 @@ void XRSLAMManager::GetResultCameraPose(XRSLAMPose *pose) const {
 }
 
 void XRSLAMManager::GetInfoIntrinsics(XRSLAMIntrinsics *intrinsics) const {
+    // [pw 2026-09-22 逐帧内参] 判决书 §3.7 第 5 条(可选项):有逐帧 K 时报最近一帧的,
+    // 否则仍报 Config 的常量(上游行为)。
+    {
+        std::lock_guard<std::mutex> lk(intrinsics_mutex_);
+        if (has_latest_intrinsics_) {
+            *intrinsics = latest_intrinsics_;
+            return;
+        }
+    }
     intrinsics->fx = config_->camera_intrinsic()(0, 0);
     intrinsics->fy = config_->camera_intrinsic()(1, 1);
     intrinsics->cx = config_->camera_intrinsic()(0, 2);

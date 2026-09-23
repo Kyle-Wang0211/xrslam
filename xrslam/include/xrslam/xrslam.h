@@ -156,6 +156,13 @@ class Image {
   public:
     double t;
 
+    // [pw 2026-09-22 逐帧内参] 调研判决书 §3.7 第 2 条:平台每帧给的针孔内参。
+    // has_K == false(默认)⇒ Detail::track_camera 仍走 config->camera_intrinsic(),
+    // 即上游行为,逐位不变。核心其余读 K 的地方本来就读 frame->K(判决书 §3.2),
+    // 相邻两帧 K 不同已被结构支持,不需要再动。
+    matrix<3> K = matrix<3>::Identity();
+    bool has_K = false;
+
     virtual uchar *get_rawdata() const = 0;
     virtual size_t width() const = 0;
     virtual size_t height() const = 0;

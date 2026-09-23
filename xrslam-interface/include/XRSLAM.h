@@ -29,13 +29,26 @@ typedef enum XRSLAMSensorType {
 
 /**
  * @brief Image extension info
+ *
+ * [pw 2026-09-22 逐帧内参] 前四个 double 是上游原样预留、整仓零消费的字段
+ * (调研判决书 §3.4);本次**只在尾部追加**,前 32 字节的布局与语义一字不动。
+ * 旧调用者(按 32 字节的旧结构编译)传进来的 ext,引擎不读尾部——
+ * 判据是 XRSLAMImage::ext_size(见下),不是指针本身。
  */
 typedef struct XRSLAMImageExtension {
     double exposure_time;          /*!< image exposure time. */
     double default_focus_distance; /*!< default focus info. */
     double focal_length;           /*!< current focal length. */
     double focus_distance;         /*!< current focus distance. */
+    /* ---- 以下为 2026-09-22 追加(判决书 §3.7 第 1 条) ---- */
+    double intrinsics_fxfycxcy[4]; /*!< 当帧针孔内参(像素):fx, fy, cx, cy。
+                                        iOS 来源 kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix。 */
+    int has_intrinsics;            /*!< == 1 ⇒ intrinsics_fxfycxcy 有效;其它值一律按无效。 */
+    int reserved_pad;              /*!< 对齐填充,调用者置 0。 */
 } XRSLAMImageExtension;
+
+/** 上游 32 字节旧结构的大小;旧调用者的 ext 至多只有这么大,引擎绝不读越过它。 */
+#define XRSLAM_IMAGE_EXTENSION_LEGACY_SIZE 32u
 
 /**
  * @brief input gray image data
@@ -47,6 +60,15 @@ typedef struct XRSLAMImage {
     int stride;       /*!< image stride, number of bytes per row. */
     int camera_id;    /*!< camera id. */
     int channel;      /*!< image channel. */
+    /* [pw 2026-09-22] 版本/尺寸字段,落在上游布局里 channel 与 ext 之间**原有的
+       4 字节对齐填充**上:结构体仍是 40 字节,data/timeStamp/stride/camera_id/
+       channel/ext 六个成员的偏移一个都没动(XRSLAMManager.cpp 里有 static_assert)。
+       语义抄 Win32 的 cbSize 约定:调用者填 sizeof(XRSLAMImageExtension)——按
+       **调用者自己编译时**的头文件。旧调用者要么零初始化得到 0(出货传输层
+       PwXrslamTransportCore.cpp:211 `XRSLAMImage image{}`),要么 ext 本身就是
+       nullptr(上游 XRSLAM_iOS.mm:156 / main.cpp:143 / xrslam_node.cpp:91),
+       两种情况引擎都按旧行为走,不读 ext 的尾部。 */
+    unsigned int ext_size;     /*!< sizeof(*ext) as compiled by the caller; 0 = legacy. */
     XRSLAMImageExtension *ext; /*!< ext info of image. */
 } XRSLAMImage;
 
