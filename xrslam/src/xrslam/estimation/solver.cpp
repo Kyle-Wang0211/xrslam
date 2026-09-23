@@ -1,5 +1,7 @@
 #include <ceres/ceres.h>
+#include <chrono>
 #include <xrslam/estimation/ceres/marginalization_factor.h>
+#include <xrslam/estimation/ceres/okvis_iteration_callback.h>
 #include <xrslam/estimation/ceres/preintegration_factor.h>
 #include <xrslam/estimation/ceres/quaternion_parameterization.h>
 #include <xrslam/estimation/ceres/reprojection_factor.h>
@@ -9,6 +11,25 @@
 #include <xrslam/map/frame.h>
 
 namespace xrslam {
+
+namespace {
+thread_local const Solver::FrameBudgetScope *tl_frame_budget_scope = nullptr;
+
+double pw_steady_seconds() {
+    return std::chrono::duration<double>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+} // namespace
+
+Solver::FrameBudgetScope::FrameBudgetScope()
+    : outer(tl_frame_budget_scope), t0_seconds(pw_steady_seconds()) {
+    tl_frame_budget_scope = this;
+}
+
+Solver::FrameBudgetScope::~FrameBudgetScope() {
+    tl_frame_budget_scope = outer;
+}
 
 struct Solver::SolverDetails {
     static Config *&config() {
@@ -185,6 +206,31 @@ bool Solver::solve(bool verbose) {
     solver_options.num_threads = 1;
     solver_options.minimizer_progress_to_stdout = verbose;
     solver_options.update_state_every_iteration = true;
+
+    // [pw 2026-09-23 solver time budget] OKVIS per-frame budget.
+    // Off (budget < 0, the default) => no callback, options identical to before.
+    // On  => remaining = budget - (now - frame start), clamped at 0, exactly as
+    //        OKVIS ThreadedKFVio.cpp:527-530:
+    //          double timeLimit = timeLimitForMatchingAndOptimization
+    //                             - (okvis::Time::now() - t0Matching).toSec();
+    //          setOptimizationTimeLimit(std::max<double>(0.0, timeLimit),
+    //                                   min_iterations);
+    //        and the callback is registered the way Estimator.cpp:920-923 does
+    //        (pushed onto the ceres options' callbacks).
+    //        Our "now" is taken after the problem was built, so problem
+    //        construction is charged to the frame as well.
+    const FrameBudgetScope *scope = tl_frame_budget_scope;
+    std::unique_ptr<OkvisIterationCallback> budget_callback;
+    const double frame_budget = details->config()->solver_frame_time_budget();
+    if (scope && frame_budget >= 0.0) {
+        const double remaining =
+            frame_budget - (pw_steady_seconds() - scope->t0_seconds);
+        budget_callback = std::make_unique<OkvisIterationCallback>(
+            std::max<double>(0.0, remaining),
+            (int)details->config()->solver_min_iterations());
+        solver_options.callbacks.push_back(budget_callback.get());
+    }
+
     ceres::Solve(solver_options, details->problem.get(), &solver_summary);
     return solver_summary.IsSolutionUsable();
 }

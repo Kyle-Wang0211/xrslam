@@ -151,6 +151,9 @@ void SlidingWindowTracker::mirror_frame(Map *feature_tracking_map,
 }
 
 bool SlidingWindowTracker::track() {
+    // [pw 2026-09-23] OKVIS per-frame solver budget; inert unless
+    // solver.frame_time_budget >= 0 (see Solver::FrameBudgetScope).
+    Solver::FrameBudgetScope pw_frame_budget_scope;
 
     if (config->parsac_flag()) {
         if (judge_track_status()) {

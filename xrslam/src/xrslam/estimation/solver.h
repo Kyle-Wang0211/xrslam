@@ -56,6 +56,35 @@ class Solver {
 
     virtual bool solve(bool verbose = false);
 
+    // [pw 2026-09-23 solver time budget] Marks "one frame" for the OKVIS
+    // per-frame budget (Config::solver_frame_time_budget()). Construct it at the
+    // start of the per-frame estimation; every solve() on the same thread while it
+    // is alive shares the frame's budget, the way OKVIS measures from
+    // `t0Matching` (ThreadedKFVio.cpp:506, taken just before addStates()) and
+    // hands the remainder to the optimiser (ThreadedKFVio.cpp:527-530).
+    // Solves outside any scope (the initializer) are never budgeted.
+    // Deviation from OKVIS, on purpose: OKVIS's window starts before addStates()
+    // and so also pays for descriptor matching (ThreadedKFVio.cpp:506-523); the
+    // XRSLAM counterpart of matching is the KLT FeatureTracker, which runs before
+    // SlidingWindowTracker::track() (its own thread when threading is ON), so it
+    // is NOT charged here. The same number is therefore a looser budget here.
+    // thread_local, so it is also correct with XRSLAM_ENABLE_THREADING, where the
+    // sliding window runs on the frontend worker thread.
+    // With the budget off (< 0, the default) the scope is inert: it records a
+    // start time and nothing ever reads it.
+    class FrameBudgetScope {
+      public:
+        FrameBudgetScope();
+        ~FrameBudgetScope();
+        FrameBudgetScope(const FrameBudgetScope &) = delete;
+        FrameBudgetScope &operator=(const FrameBudgetScope &) = delete;
+
+      private:
+        const FrameBudgetScope *outer;
+        double t0_seconds;
+        friend class Solver;
+    };
+
   protected:
     virtual void
     manage_factor(std::unique_ptr<ReprojectionErrorFactor> &&factor);
