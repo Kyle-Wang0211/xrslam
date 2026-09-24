@@ -79,7 +79,7 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
                                              pending_frame_id);
         }
         if ((sliding_window_tracker = initializer->initialize())) {
-#if defined(XRSLAM_IOS)
+#if defined(XRSLAM_LOWLATENCY_POSE) // [pw] upstream: XRSLAM_IOS
             synchronized(detail->feature_tracker->keymap) {
                 detail->feature_tracker->synchronize_keymap(
                     sliding_window_tracker->map.get());
@@ -121,7 +121,7 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
             pw_tracked = sliding_window_tracker->track();
         }
         if (pw_tracked) {
-#if defined(XRSLAM_IOS)
+#if defined(XRSLAM_LOWLATENCY_POSE) // [pw] upstream: XRSLAM_IOS
             synchronized(detail->feature_tracker->keymap) {
                 detail->feature_tracker->synchronize_keymap(
                     sliding_window_tracker->map.get());

@@ -16,6 +16,8 @@
 #cmakedefine XRSLAM_ENABLE_THREADING
 #cmakedefine XRSLAM_PC_HEADLESS_ONLY
 #cmakedefine XRSLAM_IOS
+// [pw] Official iOS keyframe/tracking rules under a platform-neutral name (see CMakeLists.txt).
+#cmakedefine XRSLAM_LOWLATENCY_POSE
 #cmakedefine XRSLAM_TEST
 // clang-format on
 

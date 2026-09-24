@@ -21,6 +21,20 @@ option(XRSLAM_TEST "..." OFF)
 if(IOS AND NOT DEFINED XRSLAM_IOS_OVERRIDE)
   set(XRSLAM_IOS ON)
 endif()
+# [pw 2026-09-24] Upstream gates four pure-C++ tracking rules on XRSLAM_IOS
+# (feature_tracker.cpp per-frame keymap PnP -> latest_state, frontend_worker.cpp
+# synchronize_keymap x2, sliding_window_tracker.cpp "any frame with translation is a
+# keyframe"). They are algorithm, not platform: this option carries them under a
+# platform-neutral name so iOS / Android / HarmonyOS / Web can build the same rules
+# without turning on XRSLAM_IOS (which also switches the XRSLAMCreate config contract
+# to YAML text and the iOS packaging). Same rename as pw/vio 1fe750c, rules only.
+# XRSLAM_IOS=ON still implies it, so an upstream-style iOS build is unchanged; every
+# existing profile that builds with XRSLAM_IOS=OFF and does not pass this option is
+# unchanged too (default OFF).
+option(XRSLAM_LOWLATENCY_POSE "Official iOS per-frame keymap PnP + keyframe rule, any platform" OFF)
+if(XRSLAM_IOS)
+  set(XRSLAM_LOWLATENCY_POSE ON)
+endif()
 if(IOS AND NOT DEFINED XRSLAM_THREADING_OVERRIDE)
   set(XRSLAM_ENABLE_THREADING ON)
   #set(XRSLAM_ENABLE_DEBUG_INSPECTION OFF CACHE BOOL "..." FORCE)

@@ -105,7 +105,7 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
             }
             if (is_initialized) {
                 frame->preintegration.predict(last_frame, frame.get());
-#if defined(XRSLAM_IOS)
+#if defined(XRSLAM_LOWLATENCY_POSE) // [pw] upstream: XRSLAM_IOS
                 synchronized(keymap) {
                     attach_latest_frame(frame.get());
                     solve_pnp();
