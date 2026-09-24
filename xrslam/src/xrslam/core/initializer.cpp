@@ -15,6 +15,7 @@
 #include <xrslam/map/map.h>
 #include <xrslam/map/track.h>
 #include <xrslam/xrslam.h>
+#include "../utility/pw_px_scale.h" // [xrhires]
 
 namespace xrslam {
 
@@ -270,7 +271,7 @@ bool Initializer::init_sfm() {
     matrix<3> RH1, RH2;
     vector<3> TH1, TH2, nH1, nH2;
     matrix<3> H = find_homography_matrix(frame_i_keypoints, frame_j_keypoints,
-                                         0.7 / init_frame_i->K(0, 0), 0.999,
+                                         0.7 * pw_px_scale() / init_frame_i->K(0, 0) /*[xrhires] upstream 0.7*/, 0.999,
                                          1000, config->random());
     if (!decompose_homography(H, RH1, RH2, TH1, TH2, nH1, nH2)) {
         log_debug("SfM init fail: pure rotation.");
@@ -285,7 +286,7 @@ bool Initializer::init_sfm() {
     matrix<3> RE1, RE2;
     vector<3> TE;
     matrix<3> E = find_essential_matrix(frame_i_keypoints, frame_j_keypoints,
-                                        0.7 / init_frame_i->K(0, 0), 0.999,
+                                        0.7 * pw_px_scale() / init_frame_i->K(0, 0) /*[xrhires] upstream 0.7*/, 0.999,
                                         1000, config->random());
     decompose_essential(E, RE1, RE2, TE);
     TE = TE.normalized();

@@ -1,5 +1,6 @@
 #include <xrslam/extra/opencv_image.h>
 #include "../../../../xrslam/src/xrslam/utility/pw_trace.h"
+#include "../../../../xrslam/src/xrslam/utility/pw_px_scale.h" // [xrhires]
 #include <xrslam/extra/poisson_disk_filter.h>
 
 using namespace cv;
@@ -63,9 +64,10 @@ void OpenCvImage::detect_keypoints(std::vector<vector<2>> &keypoints,
         new_keypoints.erase(
             std::remove_if(new_keypoints.begin(), new_keypoints.end(),
                            [this](const auto &keypoint) {
-                               return keypoint.x() < 20 || keypoint.y() < 20 ||
-                                      keypoint.x() >= image.cols - 20 ||
-                                      keypoint.y() >= image.rows - 20;
+                               const double b = 20 * pw_px_scale(); // [xrhires] upstream 20
+                               return keypoint.x() < b || keypoint.y() < b ||
+                                      keypoint.x() >= image.cols - b ||
+                                      keypoint.y() >= image.rows - b;
                            }),
             new_keypoints.end());
 
@@ -101,10 +103,11 @@ void OpenCvImage::track_keypoints(const Image *next_image,
             OPTFLOW_USE_INITIAL_FLOW);
         for (size_t i = 0; i < next_cvpoints.size(); ++i) {
             result_status[i] = cvstatus.at<unsigned char>((int)i);
-            if (next_cvpoints[i].x < 20 ||
-                next_cvpoints[i].x >= image.cols - 20 ||
-                next_cvpoints[i].y < 20 ||
-                next_cvpoints[i].y >= image.rows - 20) {
+            const double b = 20 * pw_px_scale(); // [xrhires] upstream 20
+            if (next_cvpoints[i].x < b ||
+                next_cvpoints[i].x >= image.cols - b ||
+                next_cvpoints[i].y < b ||
+                next_cvpoints[i].y >= image.rows - b) {
                 result_status[i] = 0;
             }
             if (result_status[i]) {
@@ -130,7 +133,8 @@ void OpenCvImage::track_keypoints(const Image *next_image,
             for (size_t i = 0; i < reverse_status.size(); ++i) {
                 if (result_status[i]) {
                     if (!reverse_status[i] ||
-                        cv::norm(curr_cvpoints[i] - reverse_pts[i]) > 0.5) {
+                        cv::norm(curr_cvpoints[i] - reverse_pts[i]) >
+                            0.5 * pw_px_scale()) { // [xrhires] upstream 0.5
                         result_status[i] = 0;
                     }
                 }
@@ -187,7 +191,8 @@ CLAHE *OpenCvImage::clahe(double clipLimit, int width, int height) {
 
 GFTTDetector *OpenCvImage::gftt(size_t max_points) {
     static Ptr<GFTTDetector> s_gftt =
-        GFTTDetector::create(max_points, 1.0e-3, 20, 3, true);
+        GFTTDetector::create(max_points, 1.0e-3, 20 * pw_px_scale(),
+                             pw_gftt_block(), true); // [xrhires] upstream 20, 3
     return s_gftt.get();
 }
 

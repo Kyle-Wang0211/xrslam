@@ -4,6 +4,7 @@
 #include <ceres/cubic_interpolation.h>
 #include <opencv2/opencv.hpp>
 #include <xrslam/xrslam.h>
+#include "../../../../xrslam/src/xrslam/utility/pw_px_scale.h" // [xrhires]
 
 namespace xrslam::extra {
 
@@ -17,7 +18,9 @@ class OpenCvImage : public Image {
 
     size_t height() const override { return image.rows; }
 
-    size_t level_num() const override { return 3; }
+    size_t level_num() const override {
+        return 3 + pw_lk_extra_levels(); // [xrhires] upstream 3
+    }
 
     double evaluate(const vector<2> &u, int level = 0) const override;
     double evaluate(const vector<2> &u, vector<2> &ddu,

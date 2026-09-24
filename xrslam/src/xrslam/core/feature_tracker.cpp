@@ -318,3 +318,31 @@ void FeatureTracker::solve_pnp() {
 }
 
 } // namespace xrslam
+
+#if defined(PW_ZONE_STATS)
+// [xrhires 2026-09-24, measurement only] dump per-zone wall-clock stats (see pw_trace.h).
+#include <algorithm>
+#include <cstdio>
+extern "C" void pw_zone_stats_dump(const char *path) {
+    FILE *f = std::fopen(path, "w");
+    if (!f)
+        return;
+    std::lock_guard<std::mutex> g(pw_zs::reg_mutex());
+    for (pw_zs::Site *s = pw_zs::head(); s; s = s->next) {
+        std::lock_guard<std::mutex> gs(s->m);
+        std::vector<float> v = s->ms;
+        if (v.empty())
+            continue;
+        std::sort(v.begin(), v.end());
+        double sum = 0;
+        for (float x : v)
+            sum += x;
+        auto q = [&](double p) { return v[std::min(v.size() - 1, (size_t)(p * (v.size() - 1) + 0.5))]; };
+        std::fprintf(f,
+                     "{\"zone\":\"%s\",\"n\":%zu,\"mean\":%.4f,\"p50\":%.4f,\"p90\":%.4f,\"p95\":%.4f,"
+                     "\"p99\":%.4f,\"max\":%.4f,\"sum_ms\":%.2f}\n",
+                     s->name, v.size(), sum / v.size(), q(0.5), q(0.9), q(0.95), q(0.99), v.back(), sum);
+    }
+    std::fclose(f);
+}
+#endif
