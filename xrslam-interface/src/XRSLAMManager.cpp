@@ -460,6 +460,77 @@ int XRSLAMManager::GetBackendWindowStates(XRSLAMBackendState *out, int capacity)
     return static_cast<int>(recs.size());
 }
 
+// [xr-recon-chain 2026-09-25] 后端帧状态外推。输入取 XRSLAMBackendState 里的 body 位姿原值
+// (frame->pose)、速度与零偏(frame->motion)与帧时刻,交给 Detail::propagate_state_with_history
+// (只调用 propagate_state_okvis2);输出按 pw_fill_backend_pose 同一条两步式子换到相机,
+// 与 XRSLAMBackendPose / XRSLAM_RESULT_CAMERA_POSE 同口径。这里不算任何别的东西。
+static_assert(sizeof(XRSLAMPropagatedState) == 176 &&
+                  offsetof(XRSLAMPropagatedState, quaternion) == 8 &&
+                  offsetof(XRSLAMPropagatedState, translation) == 40 &&
+                  offsetof(XRSLAMPropagatedState, body_quaternion) == 64 &&
+                  offsetof(XRSLAMPropagatedState, body_translation) == 96 &&
+                  offsetof(XRSLAMPropagatedState, velocity) == 120 &&
+                  offsetof(XRSLAMPropagatedState, state_timestamp) == 144 &&
+                  offsetof(XRSLAMPropagatedState, imu_first_t) == 152 &&
+                  offsetof(XRSLAMPropagatedState, imu_last_t) == 160 &&
+                  offsetof(XRSLAMPropagatedState, imu_samples) == 168 &&
+                  offsetof(XRSLAMPropagatedState, status) == 172,
+              "XRSLAMPropagatedState 布局是对外 ABI,改了要同步所有调用方的声明");
+
+int XRSLAMManager::PropagateBackendState(const XRSLAMBackendState *in, double t,
+                                         XRSLAMPropagatedState *out) const {
+    if (out == nullptr)
+        return XRSLAM_PROPAGATE_INVALID;
+    *out = XRSLAMPropagatedState{};
+    if (in == nullptr || !config_ || !detail_) {
+        out->status = XRSLAM_PROPAGATE_INVALID;
+        return out->status;
+    }
+    const XRSLAMBackendPose &bp = in->pose;
+    double state_time = bp.timestamp;
+    Pose pose;
+    pose.q = quaternion(bp.body_quaternion[3], bp.body_quaternion[0], bp.body_quaternion[1],
+                        bp.body_quaternion[2]); // Eigen(w, x, y, z)
+    pose.p = {bp.body_translation[0], bp.body_translation[1], bp.body_translation[2]};
+    MotionState motion;
+    motion.v = {in->velocity[0], in->velocity[1], in->velocity[2]};
+    motion.bg = {in->gyro_bias[0], in->gyro_bias[1], in->gyro_bias[2]};
+    motion.ba = {in->acc_bias[0], in->acc_bias[1], in->acc_bias[2]};
+    out->state_timestamp = state_time;
+    int status = XRSLAM_PROPAGATE_INVALID;
+    size_t used = 0;
+    double first_t = 0.0, last_t = 0.0;
+    if (!pose.q.coeffs().isZero()) {
+        status = detail_->propagate_state_with_history(state_time, pose, motion, t, &used,
+                                                       &first_t, &last_t);
+    }
+    Pose o;
+    o.q = pose.q * config_->output_to_body_rotation();
+    o.p = pose.p + pose.q * config_->output_to_body_translation();
+    Pose cam;
+    cam.q = o.q * config_->camera_to_body_rotation();
+    cam.p = o.p + o.q * config_->camera_to_body_translation();
+    out->timestamp = state_time;
+    out->quaternion[0] = cam.q.x();
+    out->quaternion[1] = cam.q.y();
+    out->quaternion[2] = cam.q.z();
+    out->quaternion[3] = cam.q.w();
+    out->body_quaternion[0] = pose.q.x();
+    out->body_quaternion[1] = pose.q.y();
+    out->body_quaternion[2] = pose.q.z();
+    out->body_quaternion[3] = pose.q.w();
+    for (int i = 0; i < 3; ++i) {
+        out->translation[i] = cam.p(i);
+        out->body_translation[i] = pose.p(i);
+        out->velocity[i] = motion.v(i);
+    }
+    out->imu_first_t = first_t;
+    out->imu_last_t = last_t;
+    out->imu_samples = static_cast<int>(used);
+    out->status = status;
+    return status;
+}
+
 void XRSLAMManager::GetInfoIntrinsics(XRSLAMIntrinsics *intrinsics) const {
     // [pw 2026-09-22 逐帧内参] 判决书 §3.7 第 5 条(可选项):有逐帧 K 时报最近一帧的,
     // 否则仍报 Config 的常量(上游行为)。

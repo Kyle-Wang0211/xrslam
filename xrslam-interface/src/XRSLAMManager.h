@@ -105,6 +105,9 @@ class XRSLAMManager {
     // [2026-09-25] 同上,记录多带速度与零偏(XRSLAMBackendState)。
     int DrainBackendStates(XRSLAMBackendState *out, int capacity, unsigned long long *dropped) const;
     int GetBackendWindowStates(XRSLAMBackendState *out, int capacity) const;
+    // [xr-recon-chain 2026-09-25] 后端帧状态沿引擎缓存的 IMU 外推到 t(见 XRSLAMBackendPose.h)。
+    int PropagateBackendState(const XRSLAMBackendState *state, double t,
+                              XRSLAMPropagatedState *out) const;
   private:
     XRSLAMManager();
 

@@ -73,6 +73,47 @@ int XRSLAMGetBackendWindowPoses(XRSLAMBackendPose *out, int capacity);
 int XRSLAMDrainBackendStates(XRSLAMBackendState *out, int capacity, unsigned long long *dropped);
 int XRSLAMGetBackendWindowStates(XRSLAMBackendState *out, int capacity);
 
+/**
+ * [xr-recon-chain 2026-09-25] 把一条后端帧状态(通常是 FINAL 定稿值)沿引擎缓存的 IMU 外推到 t。
+ *
+ * 用户 2026-09-25 拍板「后端定稿 + 官方外推」:外推只调用引擎自己的 propagate_state_okvis2
+ * (detail.cpp,OKVIS2 离散:端点按时间插值 + 段内梯形),规则与 predict_pose 逐句相同
+ * (保留状态时刻处(含)之前最后一个样本;积到 min(t, 已缓存最新样本));不插值、不平滑、不补偿。
+ * 样本来源是引擎 track_imu 收到的同一条 IMU 流的留底(Detail::imu_history_,上限 16384 条,
+ * 丢最旧)。只能往前推(t ≥ 状态时刻)。
+ *
+ * 位姿口径与 XRSLAMBackendPose 相同:body 位姿原值 + 相机位姿(先 output_to_body 再 camera_to_body,
+ * = XRSLAM_RESULT_CAMERA_POSE)。零偏不随外推改变(OKVIS2 外推同样不改零偏)。
+ * 返回值 = out->status。status < 0 时状态未外推,out 里的位姿/速度是输入状态原值(按同一口径换算),
+ * timestamp = 状态时刻 —— 调用方必须看 status,不许拿它当 t 时刻的位姿用。
+ */
+enum {
+    XRSLAM_PROPAGATE_OK = 0,                    /*!< 外推到了 t(out->timestamp == t)。 */
+    XRSLAM_PROPAGATE_IMU_NOT_YET = 1,           /*!< 缓存的 IMU 还没到 t,按 predict_pose 规则只积到
+                                                     最新样本(out->timestamp < t)。 */
+    XRSLAM_PROPAGATE_INVALID = -1,              /*!< 空指针 / 引擎没在跑 / 输入四元数全零。 */
+    XRSLAM_PROPAGATE_IMU_NOT_COVERED = -2,      /*!< 缓存里没有状态时刻(含)之前的样本(未到或已被挤掉)。 */
+    XRSLAM_PROPAGATE_BACKWARD = -3,             /*!< t 早于状态时刻或非有限:只能往前推。 */
+    XRSLAM_PROPAGATE_INTEGRATION_REFUSED = -4   /*!< OKVIS2 积分拒绝(样本不足等)。 */
+};
+
+typedef struct XRSLAMPropagatedState {
+    double timestamp;            /*!< 实际到达的时刻(status == OK 时逐位等于 t)。 */
+    double quaternion[4];        /*!< 相机位姿旋转 [x, y, z, w](同 XRSLAMBackendPose.quaternion)。 */
+    double translation[3];       /*!< 相机位姿平移(相机中心,world 系)。 */
+    double body_quaternion[4];   /*!< body(IMU)位姿旋转 [x, y, z, w]。 */
+    double body_translation[3];  /*!< body(IMU)位姿平移。 */
+    double velocity[3];          /*!< 外推后的 body 速度 [m/s](world 系)。 */
+    double state_timestamp;      /*!< 输入状态的时刻(= state->pose.timestamp)。 */
+    double imu_first_t;          /*!< 参与积分的第一个 IMU 样本时刻(≤ 状态时刻);没积分时见 status。 */
+    double imu_last_t;           /*!< 参与积分的最后一个 IMU 样本时刻(status == OK 时 ≥ t)。 */
+    int imu_samples;             /*!< 参与积分的样本数(t == 状态时刻时为 0)。 */
+    int status;                  /*!< XRSLAM_PROPAGATE_*。 */
+} XRSLAMPropagatedState; /* 176 字节(XRSLAMManager.cpp 里 static_assert 钉住)。 */
+
+int XRSLAMPropagateBackendState(const XRSLAMBackendState *state, double t,
+                                XRSLAMPropagatedState *out);
+
 #ifdef __cplusplus
 }
 #endif

@@ -171,3 +171,9 @@ extern "C" int XRSLAMDrainBackendStates(XRSLAMBackendState *out, int capacity,
 extern "C" int XRSLAMGetBackendWindowStates(XRSLAMBackendState *out, int capacity) {
     return xrslam::XRSLAMManager::Instance().GetBackendWindowStates(out, capacity);
 }
+
+// [xr-recon-chain 2026-09-25] 后端帧状态沿引擎缓存的 IMU 外推到 t(官方 propagate_state_okvis2)。
+extern "C" int XRSLAMPropagateBackendState(const XRSLAMBackendState *state, double t,
+                                           XRSLAMPropagatedState *out) {
+    return xrslam::XRSLAMManager::Instance().PropagateBackendState(state, t, out);
+}

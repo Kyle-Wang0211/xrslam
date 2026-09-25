@@ -149,6 +149,13 @@ Pose XRSLAM::Detail::track_camera(std::shared_ptr<Image> image) {
 }
 
 void XRSLAM::Detail::track_imu(const ImuData &imu) {
+    {
+        // [xr-recon-chain 2026-09-25] 同一个样本另存一份供后端状态外推(见 detail.h imu_history_)。
+        std::lock_guard<std::mutex> lk(imu_history_mutex_);
+        imu_history_.emplace_back(imu);
+        while (imu_history_.size() > kImuHistoryCapacity)
+            imu_history_.pop_front();
+    }
     frontal_imus.emplace_back(imu);
     imus.emplace_back(imu);
     while (imus.size() > 0 && frames.size() > 0) {
@@ -203,6 +210,74 @@ Pose XRSLAM::Detail::predict_pose(const double &t) {
         }
     }
     return output_pose;
+}
+
+// [xr-recon-chain 2026-09-25] 给定一个状态(通常是后端帧的定稿状态),用 imu_history_ 外推到 t。
+// 用户 2026-09-25 拍板「后端定稿 + 官方外推」:外推只用引擎自己的 propagate_state_okvis2,
+// 不插值、不平滑、不做任何补偿。与 predict_pose(上方)逐句对应:
+//   * 弹前端规则相同:保留 state_time 处(含)之前的最后一个样本(OKVIS2 要在起点插值);
+//   * 终点规则相同:t_end = min(t, 已缓存的最新样本时刻),t_end > state_time 才外推;
+//   * 外推函数相同:propagate_state_okvis2(梯形 + 端点插值,测量没覆盖到 t_end 时它自己不动状态)。
+// 与 predict_pose 唯一不同的是样本来源:predict_pose 用 frontal_imus(随最新状态前移而弹掉旧样本),
+// 这里用 imu_history_(同一条样本流的留底)。离线工具 xr_propagate2.cc 把 detail.cpp 原样
+// #include 进来走的是同一套规则,两者在 IMU 覆盖到 t 时应逐位相同。
+// 返回:
+//    0  外推到了 t(state_time == t);t == state_time 时不积分,原样返回;
+//    1  缓存里的 IMU 还没到 t,按 predict_pose 的规则只积到最新样本(state_time < t);
+//   -2  缓存里没有 state_time 处(含)之前的样本(还没来 / 已被上限挤掉)⇒ 状态不动;
+//       predict_pose 在这种情况下仍会交给 OKVIS2 在起点外插,这里如实拒绝;
+//   -3  t < state_time(新积分只能往前推)或非有限 ⇒ 状态不动;
+//   -4  OKVIS2 积分拒绝(样本不足两个等)⇒ 状态不动。
+// 出参:*imu_samples = 参与积分的样本数(同 xr_propagate2 的计数法),*imu_first_t / *imu_last_t
+// = 其中第一个 / 最后一个样本的时刻。
+int XRSLAM::Detail::propagate_state_with_history(
+    double &state_time, Pose &state_pose, MotionState &state_motion, double t,
+    size_t *imu_samples, double *imu_first_t, double *imu_last_t) {
+    if (imu_samples)
+        *imu_samples = 0;
+    if (imu_first_t)
+        *imu_first_t = 0.0;
+    if (imu_last_t)
+        *imu_last_t = 0.0;
+    if (!std::isfinite(t) || !std::isfinite(state_time) || t < state_time)
+        return -3;
+    std::deque<ImuData> seg;
+    {
+        std::lock_guard<std::mutex> lk(imu_history_mutex_);
+        const size_t n = imu_history_.size();
+        size_t i0 = 0;
+        while (i0 + 1 < n && imu_history_[i0 + 1].t <= state_time)
+            ++i0;
+        for (size_t i = i0; i < n; ++i) {
+            seg.push_back(imu_history_[i]);
+            if (imu_history_[i].t >= t)
+                break;
+        }
+    }
+    if (seg.empty() || seg.front().t > state_time)
+        return -2;
+    const double t_end = std::min(t, seg.back().t);
+    size_t used = 0;
+    double last_used = seg.front().t;
+    if (t_end > state_time) {
+        for (const auto &d : seg) {
+            ++used;
+            last_used = d.t;
+            if (d.t >= t_end)
+                break;
+        }
+        const double before = state_time;
+        propagate_state_okvis2(state_time, state_pose, state_motion, seg, t_end);
+        if (state_time == before)
+            return -4;
+    }
+    if (imu_samples)
+        *imu_samples = used;
+    if (imu_first_t)
+        *imu_first_t = seg.front().t;
+    if (imu_last_t)
+        *imu_last_t = last_used;
+    return state_time == t ? 0 : 1;
 }
 
 size_t XRSLAM::Detail::create_virtual_object() {
