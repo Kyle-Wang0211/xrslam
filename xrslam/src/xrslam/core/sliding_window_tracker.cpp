@@ -169,7 +169,8 @@ SlidingWindowTracker::SlidingWindowTracker(std::unique_ptr<Map> keyframe_map,
     for (size_t j = 1; j < map->frame_num(); ++j) {
         Frame *frame_i = map->get_frame(j - 1);
         Frame *frame_j = map->get_frame(j);
-        frame_j->preintegration.integrate(frame_j->image->t, frame_i->motion.bg,
+        frame_j->preintegration.integrate(frame_i->image->t, frame_j->image->t,
+                                          frame_i->motion.bg,
                                           frame_i->motion.ba, true, true);
     }
     // [bench 2026-09-25] 初始化成功:窗口里每一帧第一次有后端位姿(初始化 BA 的结果),各记一条 First,
@@ -206,9 +207,10 @@ void SlidingWindowTracker::mirror_frame(Map *feature_tracking_map,
     std::unique_ptr<Frame> curr_frame = std::move(old_frame_j->clone());
     std::vector<ImuData> &new_data = curr_frame->preintegration.data;
     for (size_t index = frame_index_j - 1; index > frame_index_i; --index) {
-        std::vector<ImuData> old_data =
+        const std::vector<ImuData> &old_data =
             feature_tracking_map->get_frame(index)->preintegration.data;
-        new_data.insert(new_data.begin(), old_data.begin(), old_data.end());
+        // [pw 2026-09-25 okvis2-preint] 拼接去掉两段接缝处的越界样本拷贝(见 PreIntegrator::prepend_data)
+        PreIntegrator::prepend_data(new_data, old_data);
     }
 
     map->attach_frame(curr_frame->clone());
@@ -230,9 +232,9 @@ void SlidingWindowTracker::mirror_frame(Map *feature_tracking_map,
         return track->tag(TT_TRASH) && !track->tag(TT_STATIC);
     });
 
-    new_frame_j->preintegration.integrate(new_frame_j->image->t,
-                                          new_frame_i->motion.bg,
-                                          new_frame_i->motion.ba, true, true);
+    new_frame_j->preintegration.integrate(
+        new_frame_i->image->t, new_frame_j->image->t, new_frame_i->motion.bg,
+        new_frame_i->motion.ba, true, true);
     new_frame_j->preintegration.predict(new_frame_i, new_frame_j);
 }
 
@@ -475,17 +477,16 @@ void SlidingWindowTracker::refine_window() {
             std::vector<ImuData> imu_data;
             for (size_t k = 0; k < frame_i->subframes.size(); ++k) {
                 auto &sub_imu_data = frame_i->subframes[k]->preintegration.data;
-                imu_data.insert(imu_data.end(), sub_imu_data.begin(),
-                                sub_imu_data.end());
+                // [pw 2026-09-25 okvis2-preint] 拼接去重(见 PreIntegrator::append_data)
+                PreIntegrator::append_data(imu_data, sub_imu_data);
             }
-            frame_j->keyframe_preintegration.data.insert(
-                frame_j->keyframe_preintegration.data.begin(), imu_data.begin(),
-                imu_data.end());
+            PreIntegrator::prepend_data(frame_j->keyframe_preintegration.data,
+                                        imu_data);
         }
 
         if (frame_j->keyframe_preintegration.integrate(
-                frame_j->image->t, frame_i->motion.bg, frame_i->motion.ba, true,
-                true)) {
+                frame_i->image->t, frame_j->image->t, frame_i->motion.bg,
+                frame_i->motion.ba, true, true)) {
             solver->put_factor(Solver::create_preintegration_error_factor(
                 frame_i, frame_j, frame_j->keyframe_preintegration));
         }
@@ -568,15 +569,14 @@ void SlidingWindowTracker::refine_subwindow() {
                     Frame *src_frame = frame->subframes[j - 1].get();
                     // [bench 2026-09-25] 后端位姿出口:无平移子帧被合并删除,此刻的值就是定稿值。
                     pw_backend_pose_emit(src_frame, kPwBackendPoseFinal);
-                    imu_data.insert(imu_data.begin(),
-                                    src_frame->preintegration.data.begin(),
-                                    src_frame->preintegration.data.end());
+                    // [pw 2026-09-25 okvis2-preint] 拼接去重(见 PreIntegrator::prepend_data)
+                    PreIntegrator::prepend_data(imu_data,
+                                                src_frame->preintegration.data);
                     map->untrack_frame(src_frame);
                     frame->subframes.erase(frame->subframes.begin() + (j - 1));
                 }
-                tgt_frame->preintegration.data.insert(
-                    tgt_frame->preintegration.data.begin(), imu_data.begin(),
-                    imu_data.end());
+                PreIntegrator::prepend_data(tgt_frame->preintegration.data,
+                                            imu_data);
             }
         }
 
@@ -591,8 +591,8 @@ void SlidingWindowTracker::refine_subwindow() {
             Frame *prev_frame =
                 (i == 0 ? frame : frame->subframes[i - 1].get());
             subframe->preintegration.integrate(
-                subframe->image->t, prev_frame->motion.bg,
-                prev_frame->motion.ba, true, true);
+                prev_frame->image->t, subframe->image->t,
+                prev_frame->motion.bg, prev_frame->motion.ba, true, true);
             solver->put_factor(Solver::create_preintegration_error_factor(
                 prev_frame, subframe, subframe->preintegration));
         }
@@ -630,8 +630,8 @@ void SlidingWindowTracker::refine_subwindow() {
             Frame *prev_frame =
                 (i == 0 ? frame : frame->subframes[i - 1].get());
             subframe->preintegration.integrate(
-                subframe->image->t, prev_frame->motion.bg,
-                prev_frame->motion.ba, true, true);
+                prev_frame->image->t, subframe->image->t,
+                prev_frame->motion.bg, prev_frame->motion.ba, true, true);
             solver->put_factor(Solver::create_preintegration_error_factor(
                 prev_frame, subframe, subframe->preintegration));
             for (size_t k = 0; k < subframe->keypoint_num(); ++k) {
@@ -787,7 +787,8 @@ bool SlidingWindowTracker::judge_track_status() {
         last_frame = keyframe->subframes.back().get();
     }
 
-    curr_frame->preintegration.integrate(curr_frame->image->t,
+    curr_frame->preintegration.integrate(last_frame->image->t,
+                                         curr_frame->image->t,
                                          last_frame->motion.bg,
                                          last_frame->motion.ba, true, true);
     curr_frame->preintegration.predict(last_frame, curr_frame);

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <xrslam/common.h>
 #include "../utility/pw_trace.h"
 #include <xrslam/core/detail.h>
@@ -72,8 +73,9 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
                         Frame *frame_i = map->get_frame(j - 1);
                         Frame *frame_j = map->get_frame(j);
                         frame_j->preintegration.integrate(
-                            frame_j->image->t, frame_i->motion.bg,
-                            frame_i->motion.ba, false, false);
+                            frame_i->image->t, frame_j->image->t,
+                            frame_i->motion.bg, frame_i->motion.ba, false,
+                            false);
                         frame_j->preintegration.predict(frame_i, frame_j);
                     }
                 } else {
@@ -85,20 +87,25 @@ void FeatureTracker::work(std::unique_lock<std::mutex> &l) {
                 }
             }
             Frame *last_frame = map->get_frame(map->frame_num() - 1);
-            if (!last_frame->preintegration.data.empty()) {
-                if (frame->preintegration.data.empty() ||
-                    (frame->preintegration.data.front().t -
-                         last_frame->image->t >
-                     1.0e-5)) {
-                    ImuData imu = last_frame->preintegration.data.back();
-                    imu.t = last_frame->image->t;
-                    frame->preintegration.data.insert(
-                        frame->preintegration.data.begin(), imu);
+            // [pw 2026-09-25 okvis2-preint] 上游在这里插一个「上一帧末样本、时间戳改成上一帧时刻」的拷贝
+            // (左端零阶保持,积出的姿态比时间戳早约半个采样周期)。现照 OKVIS2 ImuError:测量须覆盖
+            // [t0, t1] 并在 t0 处按时间插值 ⇒ 插入上一帧里时刻 <= 上一帧时刻的最后一个原始样本,时间戳不改。
+            {
+                const std::vector<ImuData> &last_data =
+                    last_frame->preintegration.data;
+                const double t_last = last_frame->image->t;
+                std::vector<ImuData> &data = frame->preintegration.data;
+                if (data.empty() || data.front().t > t_last) {
+                    auto it = std::upper_bound(
+                        last_data.begin(), last_data.end(), t_last,
+                        [](double t, const ImuData &d) { return t < d.t; });
+                    if (it != last_data.begin())
+                        data.insert(data.begin(), *(it - 1));
                 }
             }
             frame->preintegration.integrate(
-                frame->image->t, last_frame->motion.bg, last_frame->motion.ba,
-                false, false);
+                last_frame->image->t, frame->image->t, last_frame->motion.bg,
+                last_frame->motion.ba, false, false);
             {
                 PW_ZONE("frontend.track_call");
                 last_frame->track_keypoints(frame.get(), config.get());

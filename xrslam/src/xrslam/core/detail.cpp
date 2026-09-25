@@ -2,6 +2,7 @@
 #include <xrslam/core/detail.h>
 #include <xrslam/core/feature_tracker.h>
 #include <xrslam/core/frontend_worker.h>
+#include <xrslam/estimation/okvis2_imu_integration.h>
 #include <xrslam/estimation/solver.h>
 #include <xrslam/geometry/lie_algebra.h>
 #include <xrslam/geometry/stereo.h>
@@ -12,19 +13,36 @@
 
 namespace xrslam {
 
-static void propagate_state(double &state_time, PoseState &state_pose,
-                            MotionState &state_motion, double t,
-                            const vector<3> &w, const vector<3> &a) {
+// [pw 2026-09-25 okvis2-preint] 上游 propagate_state 逐样本右端零阶保持(每段用段末样本)已删,
+// 换成 OKVIS2 ImuError::propagation()(ImuError.cpp:557-779)同一离散:从 t_start 到 t_end,端点按时间
+// 线性插值、段内梯形,输出式照抄(r_1 = r_0 + v_0 Δt + C_WS_0 · acc_doubleintegral - ½ g Δt²、
+// q_1 = q_0 · Delta_q、v_1 = v_0 + C_WS_0 · acc_integral - g Δt;g 取 XRSLAM 的名义重力,符号换成
+// XRSLAM 的 (0,0,-g))。积分循环与后端预积分是同一份(okvis2_imu_integration.h)。
+static void propagate_state_okvis2(double &state_time, PoseState &state_pose,
+                                   MotionState &state_motion,
+                                   const std::deque<ImuData> &imus,
+                                   double t_end) {
     static const vector<3> gravity = {0, 0, -XRSLAM_GRAVITY_NOMINAL};
-    double dt = t - state_time;
-    state_pose.p =
-        state_pose.p + dt * state_motion.v +
-        0.5 * dt * dt * (gravity + state_pose.q * (a - state_motion.ba));
+    // 只取到第一个时间 >= t_end 的样本为止(OKVIS2 在那里插值收尾)
+    std::vector<ImuData> seg;
+    for (const auto &imu : imus) {
+        seg.push_back(imu);
+        if (imu.t >= t_end)
+            break;
+    }
+    okvis2::Preintegral pi;
+    if (okvis2::preintegrate(seg.data(), seg.size(), state_time, t_end,
+                             state_motion.bg, state_motion.ba, nullptr, false,
+                             false, pi) < 0)
+        return; // OKVIS2:测量没覆盖到 t_end 则不外推
+    const double Dt = pi.Delta_t;
+    state_pose.p = state_pose.p + state_motion.v * Dt +
+                   state_pose.q * pi.acc_doubleintegral +
+                   0.5 * gravity * Dt * Dt;
     state_motion.v =
-        state_motion.v + dt * (gravity + state_pose.q * (a - state_motion.ba));
-    state_pose.q =
-        (state_pose.q * expmap((w - state_motion.bg) * dt)).normalized();
-    state_time = t;
+        state_motion.v + state_pose.q * pi.acc_integral + gravity * Dt;
+    state_pose.q = state_pose.q * pi.Delta_q;
+    state_time = t_end;
 }
 
 XRSLAM::Detail::Detail(std::shared_ptr<Config> config) : config(config) {
@@ -138,6 +156,9 @@ void XRSLAM::Detail::track_imu(const ImuData &imu) {
             frames.front()->preintegration.data.push_back(imus.front());
             imus.pop_front();
         } else {
+            // [pw 2026-09-25 okvis2-preint] OKVIS2 ImuError 要求测量覆盖 [t0, t1] 以便在 t1 处插值:
+            // 把第一个越过帧时刻的样本也给这一帧(拷贝;它仍留在 imus 里,归下一帧)。
+            frames.front()->preintegration.data.push_back(imus.front());
             feature_tracker->track_frame(std::move(frames.front()));
             frames.pop_front();
         }
@@ -153,13 +174,18 @@ Pose XRSLAM::Detail::predict_pose(const double &t) {
         }
         // std::cout << "delay: " << t - state_time << std::endl;
 
-        while (!frontal_imus.empty() && frontal_imus.front().t <= state_time) {
+        // [pw 2026-09-25 okvis2-preint] 留下 state_time 处(含)之前的最后一个样本,OKVIS2 要用它在
+        // t_start 处插值;上游把 <= state_time 的全弹掉,再逐样本右端保持外推到 <= t 的最后一个样本。
+        while (frontal_imus.size() >= 2 && frontal_imus[1].t <= state_time) {
             frontal_imus.pop_front();
         }
-        for (const auto &imu : frontal_imus) {
-            if (imu.t <= t) {
-                propagate_state(state_time, state_pose, state_motion, imu.t,
-                                imu.w, imu.a);
+        // 外推终点:测量已覆盖 t 时就到 t(OKVIS2 propagation 到给定时刻);还没覆盖时到最新样本
+        // (OKVIS2 实时外推 Trajectory::addImuMeasurement 的做法:状态时刻 = 最新 IMU 时刻,不外插)。
+        if (!frontal_imus.empty()) {
+            const double t_end = std::min(t, frontal_imus.back().t);
+            if (t_end > state_time) {
+                propagate_state_okvis2(state_time, state_pose, state_motion,
+                                       frontal_imus, t_end);
             }
         }
         output_pose.q = state_pose.q * config->output_to_body_rotation();

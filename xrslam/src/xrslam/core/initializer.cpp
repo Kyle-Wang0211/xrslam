@@ -129,7 +129,8 @@ void Initializer::mirror_keyframe_map(Map *feature_tracking_map,
             Frame *old_frame = feature_tracking_map->get_frame(f + 1);
             std::vector<ImuData> &old_data = old_frame->preintegration.data;
             std::vector<ImuData> &new_data = new_frame_j->preintegration.data;
-            new_data.insert(new_data.end(), old_data.begin(), old_data.end());
+            // [pw 2026-09-25 okvis2-preint] 拼接去重(见 PreIntegrator::append_data)
+            PreIntegrator::append_data(new_data, old_data);
         }
     }
     pw_init_mirror_us += (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
@@ -186,7 +187,8 @@ std::unique_ptr<SlidingWindowTracker> Initializer::initialize() {
     for (size_t j = 1; j < map->frame_num(); ++j) {
         Frame *frame_i = map->get_frame(j - 1);
         Frame *frame_j = map->get_frame(j);
-        if (frame_j->preintegration.integrate(frame_j->image->t,
+        if (frame_j->preintegration.integrate(frame_i->image->t,
+                                              frame_j->image->t,
                                               frame_i->motion.bg,
                                               frame_i->motion.ba, true, true)) {
             solver->put_factor(Solver::create_preintegration_error_factor(
@@ -598,9 +600,10 @@ void Initializer::reset_states() {
 
 void Initializer::preintegrate() {
     for (size_t j = 1; j < map->frame_num(); ++j) {
+        Frame *frame_i = map->get_frame(j - 1);
         Frame *frame_j = map->get_frame(j);
-        frame_j->preintegration.integrate(frame_j->image->t, bg, ba, true,
-                                          false);
+        frame_j->preintegration.integrate(frame_i->image->t, frame_j->image->t,
+                                          bg, ba, true, false);
     }
 }
 
