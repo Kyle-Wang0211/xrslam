@@ -150,3 +150,14 @@ extern "C" void XRSLAMGetPropagatedPoseRelation(XRSLAMPose *pose, unsigned int *
 extern "C" void XRSLAMGetBodyPoseRelation(XRSLAMPose *pose, unsigned int *flags) {
     xrslam::XRSLAMManager::Instance().GetBodyPoseRelation(pose, flags);
 }
+
+// [bench 2026-09-25] 后端(滑动窗口 BA)已优化帧位姿的只读出口。声明在 XRSLAMBackendPose.h
+// (XRSLAM.h 一个字节不动,同 XRSLAMGetSolverCounters 的做法)。说明见该头文件。
+extern "C" int XRSLAMDrainBackendPoses(XRSLAMBackendPose *out, int capacity,
+                                       unsigned long long *dropped) {
+    return xrslam::XRSLAMManager::Instance().DrainBackendPoses(out, capacity, dropped);
+}
+
+extern "C" int XRSLAMGetBackendWindowPoses(XRSLAMBackendPose *out, int capacity) {
+    return xrslam::XRSLAMManager::Instance().GetBackendWindowPoses(out, capacity);
+}

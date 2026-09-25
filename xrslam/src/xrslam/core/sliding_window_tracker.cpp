@@ -1,8 +1,11 @@
 #include <atomic>
+#include <deque>
+#include <mutex>
 #include <xrslam/common.h>
 #include <xrslam/core/detail.h>
 #include <xrslam/core/feature_tracker.h>
 #include <xrslam/core/frontend_worker.h>
+#include <xrslam/core/pw_backend_pose_tap.h>
 #include <xrslam/core/sliding_window_tracker.h>
 #include <xrslam/estimation/solver.h>
 #include <xrslam/geometry/lie_algebra.h>
@@ -59,6 +62,80 @@ inline void pw_account_rpe(double rpe, double rpe_count, bool depth_ok, bool rpe
 }
 } // namespace
 
+// [bench 2026-09-25] 后端位姿出口的存放处(说明见 pw_backend_pose_tap.h)。
+// 只抄 frame 上已有的 t / id / pose / FT_KEYFRAME,不读也不写任何参与计算的量;
+// 一把独立的锁,不与引擎的 map / worker 锁嵌套。
+// 事件队列有上限:调用方不取走时只保留最新的 kPwBackendPoseQueueCap 条,丢掉的计数交给调用方,
+// 引擎内存不会因为没人读而无限涨。
+namespace {
+constexpr size_t kPwBackendPoseQueueCap = 16384;
+std::mutex pw_backend_pose_mutex;
+std::deque<PwBackendPoseRecord> pw_backend_pose_events;
+std::vector<PwBackendPoseRecord> pw_backend_pose_window_snapshot;
+uint64_t pw_backend_pose_dropped = 0;
+uint64_t pw_backend_pose_last_first_id = nil(); // First 只记一次(见 track() 里的说明)
+
+inline PwBackendPoseRecord pw_backend_pose_record(const Frame *frame, int kind) {
+    PwBackendPoseRecord r;
+    r.t = frame->image->t;
+    r.frame_id = frame->id();
+    r.pose = frame->pose;
+    r.kind = kind;
+    r.is_keyframe = frame->tag(FT_KEYFRAME) ? 1 : 0;
+    return r;
+}
+} // namespace
+
+void pw_backend_pose_emit(const Frame *frame, int kind) {
+    const PwBackendPoseRecord r = pw_backend_pose_record(frame, kind);
+    std::lock_guard<std::mutex> lk(pw_backend_pose_mutex);
+    if (kind == kPwBackendPoseFirst) {
+        if (r.frame_id == pw_backend_pose_last_first_id)
+            return;
+        pw_backend_pose_last_first_id = r.frame_id;
+    }
+    if (pw_backend_pose_events.size() >= kPwBackendPoseQueueCap) {
+        pw_backend_pose_events.pop_front();
+        ++pw_backend_pose_dropped;
+    }
+    pw_backend_pose_events.push_back(r);
+}
+
+void pw_backend_pose_publish_window(const Map *map) {
+    std::vector<PwBackendPoseRecord> snap;
+    for (size_t i = 0; i < map->frame_num(); ++i) {
+        const Frame *frame = map->get_frame(i);
+        snap.push_back(pw_backend_pose_record(frame, kPwBackendPoseWindow));
+        for (const auto &sub : frame->subframes)
+            snap.push_back(pw_backend_pose_record(sub.get(), kPwBackendPoseWindow));
+    }
+    std::lock_guard<std::mutex> lk(pw_backend_pose_mutex);
+    pw_backend_pose_window_snapshot.swap(snap);
+}
+
+void pw_backend_pose_drain(std::vector<PwBackendPoseRecord> &out, size_t max_n, uint64_t *dropped) {
+    std::lock_guard<std::mutex> lk(pw_backend_pose_mutex);
+    const size_t n = std::min(max_n, pw_backend_pose_events.size());
+    out.assign(pw_backend_pose_events.begin(), pw_backend_pose_events.begin() + n);
+    pw_backend_pose_events.erase(pw_backend_pose_events.begin(), pw_backend_pose_events.begin() + n);
+    if (dropped)
+        *dropped = pw_backend_pose_dropped;
+    pw_backend_pose_dropped = 0;
+}
+
+void pw_backend_pose_window(std::vector<PwBackendPoseRecord> &out) {
+    std::lock_guard<std::mutex> lk(pw_backend_pose_mutex);
+    out = pw_backend_pose_window_snapshot;
+}
+
+void pw_backend_pose_reset() {
+    std::lock_guard<std::mutex> lk(pw_backend_pose_mutex);
+    pw_backend_pose_events.clear();
+    pw_backend_pose_window_snapshot.clear();
+    pw_backend_pose_dropped = 0;
+    pw_backend_pose_last_first_id = nil();
+}
+
 // [bench 2026-09-17] The TT_VALID reprojection gate, in one place.
 //
 // `rpe` is in REAL pixels: both call sites take the norm after apply_k(), so the number carries the
@@ -95,6 +172,15 @@ SlidingWindowTracker::SlidingWindowTracker(std::unique_ptr<Map> keyframe_map,
         frame_j->preintegration.integrate(frame_j->image->t, frame_i->motion.bg,
                                           frame_i->motion.ba, true, true);
     }
+    // [bench 2026-09-25] 初始化成功:窗口里每一帧第一次有后端位姿(初始化 BA 的结果),各记一条 First,
+    // 再发一次整窗快照。只读 frame 字段,上面的重积分不受影响。
+    for (size_t i = 0; i < map->frame_num(); ++i) {
+        const Frame *frame = map->get_frame(i);
+        pw_backend_pose_emit(frame, kPwBackendPoseFirst);
+        for (const auto &sub : frame->subframes)
+            pw_backend_pose_emit(sub.get(), kPwBackendPoseFirst);
+    }
+    pw_backend_pose_publish_window(map.get());
 }
 
 SlidingWindowTracker::~SlidingWindowTracker() = default;
@@ -166,6 +252,18 @@ bool SlidingWindowTracker::track() {
         slide_window();
     } else {
         refine_subwindow();
+    }
+
+    // [bench 2026-09-25] 后端位姿出口:本次 track() 处理的那一帧(与 get_latest_state() 取同一帧:
+    // 窗口最后一帧,有子帧就取最后一个子帧)此刻的状态 = 它的「首次后端估计」,与 frontend_worker.cpp
+    // 紧接着写进 latest_state 的是同一份。mirror_frame() 提前返回时这里会再遇到上一帧,
+    // emit 按 frame id 去重,First 只记第一次。然后发整窗快照(上游 LANDMARKS 同一位置、同一做法)。
+    {
+        const Frame *pw_newest = map->get_frame(map->frame_num() - 1);
+        if (!pw_newest->subframes.empty())
+            pw_newest = pw_newest->subframes.back().get();
+        pw_backend_pose_emit(pw_newest, kPwBackendPoseFirst);
+        pw_backend_pose_publish_window(map.get());
     }
 
     inspect_debug(sliding_window_landmarks, landmarks) {
@@ -446,6 +544,10 @@ void SlidingWindowTracker::refine_window() {
 void SlidingWindowTracker::slide_window() {
     while (map->frame_num() > config->sliding_window_size()) {
         Frame *frame = map->get_frame(0);
+        // [bench 2026-09-25] 后端位姿出口:这一关键帧与它挂着的子帧马上离开窗口,此刻的值就是定稿值。
+        pw_backend_pose_emit(frame, kPwBackendPoseFinal);
+        for (size_t i = 0; i < frame->subframes.size(); ++i)
+            pw_backend_pose_emit(frame->subframes[i].get(), kPwBackendPoseFinal);
         for (size_t i = 0; i < frame->subframes.size(); ++i) {
             map->untrack_frame(frame->subframes[i].get());
         }
@@ -464,6 +566,8 @@ void SlidingWindowTracker::refine_subwindow() {
                 std::vector<ImuData> imu_data;
                 for (size_t j = i * 3 - 1; j > (i - 1) * 3; --j) {
                     Frame *src_frame = frame->subframes[j - 1].get();
+                    // [bench 2026-09-25] 后端位姿出口:无平移子帧被合并删除,此刻的值就是定稿值。
+                    pw_backend_pose_emit(src_frame, kPwBackendPoseFinal);
                     imu_data.insert(imu_data.begin(),
                                     src_frame->preintegration.data.begin(),
                                     src_frame->preintegration.data.end());

@@ -2,10 +2,12 @@
 #include <xrslam/extra/gpu_image.h>
 #endif
 #include <cmath>
+#include <cstddef>
 #include "XRSLAMManager.h"
 #include "XRSLAMImageExt.h"   // [pw 2026-09-22] 逐帧内参消费规则 + ABI 静态断言
 #include "xrslam/core/feature_tracker.h"
 #include "xrslam/core/frontend_worker.h"
+#include "xrslam/core/pw_backend_pose_tap.h" // [bench 2026-09-25] 后端位姿出口
 
 #define XRSLAM_VERSION "0.1.0"
 
@@ -101,6 +103,7 @@ static const unsigned char logo_ascii[] = {
     0xE2, 0x95, 0x90, 0xE2, 0x95, 0x9D};
 
 void XRSLAMManager::Init(std::shared_ptr<Config> config) {
+    pw_backend_pose_reset(); // [bench 2026-09-25] 不让上一会话的后端位姿记录漏到这一会话
     detail_ = std::make_unique<XRSLAM::Detail>(config);
     config_ = config;
     log_message(XRSLAM_LOG_INFO, (char *)logo_ascii, XRSLAM_VERSION_STRING);
@@ -121,6 +124,7 @@ void XRSLAMManager::Destroy() {
     // XRSLAM::Detail::~Detail() is the upstream owner of worker stop/join.
     detail_.reset();
     config_.reset();
+    pw_backend_pose_reset(); // [bench 2026-09-25] 后端线程已 join,之后不会再有人写
     std::cout << "-----------------Destroy XRSLAM v" << XRSLAM_VERSION
               << " successfully-----------" << std::endl;
 }
@@ -343,6 +347,74 @@ void XRSLAMManager::GetResultCameraPose(XRSLAMPose *pose) const {
     pose->quaternion[1] = camera_pose.q.y();
     pose->quaternion[2] = camera_pose.q.z();
     pose->quaternion[3] = camera_pose.q.w();
+}
+
+// [bench 2026-09-25] 后端位姿出口。body→camera 与 GetResultCameraPose 逐项同式:
+// 前端输出先乘 output_to_body(detail.cpp predict_pose),再乘 camera_to_body(GetResultCameraPose);
+// 这里对后端 frame->pose 按同样两步走,于是与 XRSLAM_RESULT_CAMERA_POSE 同一口径可以逐帧直接比。
+// 引擎没在跑(config_ 为空)时一条不给。
+static_assert(sizeof(XRSLAMBackendPose) == 136 && offsetof(XRSLAMBackendPose, quaternion) == 8 &&
+                  offsetof(XRSLAMBackendPose, translation) == 40 &&
+                  offsetof(XRSLAMBackendPose, body_quaternion) == 64 &&
+                  offsetof(XRSLAMBackendPose, body_translation) == 96 &&
+                  offsetof(XRSLAMBackendPose, frame_id) == 120 &&
+                  offsetof(XRSLAMBackendPose, kind) == 128 &&
+                  offsetof(XRSLAMBackendPose, is_keyframe) == 132,
+              "XRSLAMBackendPose 布局是对外 ABI,改了要同步所有调用方的声明");
+namespace {
+void pw_fill_backend_pose(const PwBackendPoseRecord &r, const Config &config, XRSLAMBackendPose *o) {
+    Pose out;
+    out.q = r.pose.q * config.output_to_body_rotation();
+    out.p = r.pose.p + r.pose.q * config.output_to_body_translation();
+    Pose cam;
+    cam.q = out.q * config.camera_to_body_rotation();
+    cam.p = out.p + out.q * config.camera_to_body_translation();
+    o->timestamp = r.t;
+    o->quaternion[0] = cam.q.x();
+    o->quaternion[1] = cam.q.y();
+    o->quaternion[2] = cam.q.z();
+    o->quaternion[3] = cam.q.w();
+    for (int i = 0; i < 3; ++i)
+        o->translation[i] = cam.p(i);
+    o->body_quaternion[0] = r.pose.q.x();
+    o->body_quaternion[1] = r.pose.q.y();
+    o->body_quaternion[2] = r.pose.q.z();
+    o->body_quaternion[3] = r.pose.q.w();
+    for (int i = 0; i < 3; ++i)
+        o->body_translation[i] = r.pose.p(i);
+    o->frame_id = static_cast<unsigned long long>(r.frame_id);
+    o->kind = r.kind;
+    o->is_keyframe = r.is_keyframe;
+}
+} // namespace
+
+int XRSLAMManager::DrainBackendPoses(XRSLAMBackendPose *out, int capacity,
+                                     unsigned long long *dropped) const {
+    if (dropped)
+        *dropped = 0;
+    if (out == nullptr || capacity <= 0 || !config_)
+        return 0;
+    std::vector<PwBackendPoseRecord> recs;
+    uint64_t d = 0;
+    pw_backend_pose_drain(recs, static_cast<size_t>(capacity), &d);
+    if (dropped)
+        *dropped = static_cast<unsigned long long>(d);
+    for (size_t i = 0; i < recs.size(); ++i)
+        pw_fill_backend_pose(recs[i], *config_, &out[i]);
+    return static_cast<int>(recs.size());
+}
+
+int XRSLAMManager::GetBackendWindowPoses(XRSLAMBackendPose *out, int capacity) const {
+    if (!config_)
+        return 0;
+    std::vector<PwBackendPoseRecord> recs;
+    pw_backend_pose_window(recs);
+    const size_t n = (out == nullptr || capacity <= 0)
+                         ? 0
+                         : std::min(recs.size(), static_cast<size_t>(capacity));
+    for (size_t i = 0; i < n; ++i)
+        pw_fill_backend_pose(recs[i], *config_, &out[i]);
+    return static_cast<int>(recs.size());
 }
 
 void XRSLAMManager::GetInfoIntrinsics(XRSLAMIntrinsics *intrinsics) const {

@@ -10,6 +10,7 @@
 #include "xrslam/extra/opencv_image.h"
 #include "xrslam/extra/yaml_config.h"
 #include "XRSLAM.h"
+#include "XRSLAMBackendPose.h" // [bench 2026-09-25] 后端位姿出口(附加,XRSLAM.h 不动)
 
 namespace xrslam {
 
@@ -98,6 +99,9 @@ class XRSLAMManager {
     void GetResultBias(XRSLAMIMUBias *bias) const;
     void GetResultVersion(XRSLAMStringOutput *output) const;
     void GetInfoIntrinsics(XRSLAMIntrinsics *intrinsics) const;
+    // [bench 2026-09-25] 后端位姿出口(见 XRSLAMBackendPose.h)。只读。
+    int DrainBackendPoses(XRSLAMBackendPose *out, int capacity, unsigned long long *dropped) const;
+    int GetBackendWindowPoses(XRSLAMBackendPose *out, int capacity) const;
   private:
     XRSLAMManager();
 
