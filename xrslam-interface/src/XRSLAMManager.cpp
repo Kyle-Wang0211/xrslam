@@ -386,6 +386,20 @@ void pw_fill_backend_pose(const PwBackendPoseRecord &r, const Config &config, XR
     o->kind = r.kind;
     o->is_keyframe = r.is_keyframe;
 }
+// [2026-09-25] 速度与零偏:frame->motion 原值照抄,不换算。
+static_assert(sizeof(XRSLAMBackendState) == 208 && offsetof(XRSLAMBackendState, pose) == 0 &&
+                  offsetof(XRSLAMBackendState, velocity) == 136 &&
+                  offsetof(XRSLAMBackendState, gyro_bias) == 160 &&
+                  offsetof(XRSLAMBackendState, acc_bias) == 184,
+              "XRSLAMBackendState 布局是对外 ABI,改了要同步所有调用方的声明");
+void pw_fill_backend_state(const PwBackendPoseRecord &r, const Config &config, XRSLAMBackendState *o) {
+    pw_fill_backend_pose(r, config, &o->pose);
+    for (int i = 0; i < 3; ++i) {
+        o->velocity[i] = r.motion.v(i);
+        o->gyro_bias[i] = r.motion.bg(i);
+        o->acc_bias[i] = r.motion.ba(i);
+    }
+}
 } // namespace
 
 int XRSLAMManager::DrainBackendPoses(XRSLAMBackendPose *out, int capacity,
@@ -414,6 +428,35 @@ int XRSLAMManager::GetBackendWindowPoses(XRSLAMBackendPose *out, int capacity) c
                          : std::min(recs.size(), static_cast<size_t>(capacity));
     for (size_t i = 0; i < n; ++i)
         pw_fill_backend_pose(recs[i], *config_, &out[i]);
+    return static_cast<int>(recs.size());
+}
+
+int XRSLAMManager::DrainBackendStates(XRSLAMBackendState *out, int capacity,
+                                      unsigned long long *dropped) const {
+    if (dropped)
+        *dropped = 0;
+    if (out == nullptr || capacity <= 0 || !config_)
+        return 0;
+    std::vector<PwBackendPoseRecord> recs;
+    uint64_t d = 0;
+    pw_backend_pose_drain(recs, static_cast<size_t>(capacity), &d);
+    if (dropped)
+        *dropped = static_cast<unsigned long long>(d);
+    for (size_t i = 0; i < recs.size(); ++i)
+        pw_fill_backend_state(recs[i], *config_, &out[i]);
+    return static_cast<int>(recs.size());
+}
+
+int XRSLAMManager::GetBackendWindowStates(XRSLAMBackendState *out, int capacity) const {
+    if (!config_)
+        return 0;
+    std::vector<PwBackendPoseRecord> recs;
+    pw_backend_pose_window(recs);
+    const size_t n = (out == nullptr || capacity <= 0)
+                         ? 0
+                         : std::min(recs.size(), static_cast<size_t>(capacity));
+    for (size_t i = 0; i < n; ++i)
+        pw_fill_backend_state(recs[i], *config_, &out[i]);
     return static_cast<int>(recs.size());
 }
 

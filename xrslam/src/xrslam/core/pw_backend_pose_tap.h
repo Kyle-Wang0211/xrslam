@@ -30,6 +30,7 @@
 #include <vector>
 
 #include <xrslam/common.h>
+#include <xrslam/estimation/state.h>
 
 namespace xrslam {
 
@@ -46,6 +47,7 @@ struct PwBackendPoseRecord {
     double t;          // frame->image->t,与调用方 PushImage 时给的 timeStamp 逐位相同
     uint64_t frame_id; // frame->id()
     Pose pose;         // frame->pose(body 位姿,world 系)
+    MotionState motion; // [2026-09-25] frame->motion(v 为 world 系 body 速度,bg / ba 为零偏),原值照抄
     int kind;          // PwBackendPoseKind
     int is_keyframe;   // frame->tag(FT_KEYFRAME)
 };

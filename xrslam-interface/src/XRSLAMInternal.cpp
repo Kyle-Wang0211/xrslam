@@ -161,3 +161,13 @@ extern "C" int XRSLAMDrainBackendPoses(XRSLAMBackendPose *out, int capacity,
 extern "C" int XRSLAMGetBackendWindowPoses(XRSLAMBackendPose *out, int capacity) {
     return xrslam::XRSLAMManager::Instance().GetBackendWindowPoses(out, capacity);
 }
+
+// [2026-09-25] 同上,记录多带后端帧的速度与零偏(XRSLAMBackendState,见 XRSLAMBackendPose.h)。
+extern "C" int XRSLAMDrainBackendStates(XRSLAMBackendState *out, int capacity,
+                                        unsigned long long *dropped) {
+    return xrslam::XRSLAMManager::Instance().DrainBackendStates(out, capacity, dropped);
+}
+
+extern "C" int XRSLAMGetBackendWindowStates(XRSLAMBackendState *out, int capacity) {
+    return xrslam::XRSLAMManager::Instance().GetBackendWindowStates(out, capacity);
+}

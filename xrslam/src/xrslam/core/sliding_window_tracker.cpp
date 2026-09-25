@@ -80,6 +80,7 @@ inline PwBackendPoseRecord pw_backend_pose_record(const Frame *frame, int kind) 
     r.t = frame->image->t;
     r.frame_id = frame->id();
     r.pose = frame->pose;
+    r.motion = frame->motion; // [2026-09-25] 只读抄出速度与零偏,不改任何状态
     r.kind = kind;
     r.is_keyframe = frame->tag(FT_KEYFRAME) ? 1 : 0;
     return r;

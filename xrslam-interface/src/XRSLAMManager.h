@@ -102,6 +102,9 @@ class XRSLAMManager {
     // [bench 2026-09-25] 后端位姿出口(见 XRSLAMBackendPose.h)。只读。
     int DrainBackendPoses(XRSLAMBackendPose *out, int capacity, unsigned long long *dropped) const;
     int GetBackendWindowPoses(XRSLAMBackendPose *out, int capacity) const;
+    // [2026-09-25] 同上,记录多带速度与零偏(XRSLAMBackendState)。
+    int DrainBackendStates(XRSLAMBackendState *out, int capacity, unsigned long long *dropped) const;
+    int GetBackendWindowStates(XRSLAMBackendState *out, int capacity) const;
   private:
     XRSLAMManager();
 

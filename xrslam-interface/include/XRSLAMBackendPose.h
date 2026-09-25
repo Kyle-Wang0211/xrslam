@@ -42,6 +42,18 @@ typedef struct XRSLAMBackendPose {
 } XRSLAMBackendPose; /* 136 字节(XRSLAMManager.cpp 里 static_assert 钉住);调用方如自带声明须同样核对。 */
 
 /**
+ * [2026-09-25] 同一条记录再附上后端帧的速度与零偏(frame->motion 原值,不换算、不插值)。
+ * 为了不动上面 136 字节的 XRSLAMBackendPose(已有调用方按它的布局分配缓冲区),另起一个结构和
+ * 两个函数;pose 成员与 XRSLAMBackendPose 逐字段相同。
+ */
+typedef struct XRSLAMBackendState {
+    XRSLAMBackendPose pose;      /*!< 与 XRSLAMDrainBackendPoses 给的那条完全相同。 */
+    double velocity[3];          /*!< body(IMU)在 world 系下的速度 [m/s](后端 frame->motion.v)。 */
+    double gyro_bias[3];         /*!< 陀螺零偏 [rad/s](frame->motion.bg,IMU 系)。 */
+    double acc_bias[3];          /*!< 加计零偏 [m/s^2](frame->motion.ba,IMU 系)。 */
+} XRSLAMBackendState; /* 208 字节(XRSLAMManager.cpp 里 static_assert 钉住)。 */
+
+/**
  * 取走 First / Final 事件(按发生顺序)。最多写 capacity 条到 out,返回写入条数;
  * 队列里多于 capacity 的部分留到下次取。*dropped(可为 NULL)= 引擎内队列满(16384 条)时
  * 丢掉的最旧事件数(自上次取走起)。引擎没在跑时返回 0。
@@ -53,6 +65,13 @@ int XRSLAMDrainBackendPoses(XRSLAMBackendPose *out, int capacity, unsigned long 
  * 最多写 capacity 条,返回快照总条数(可能大于 capacity,调用方据此扩容重取)。
  */
 int XRSLAMGetBackendWindowPoses(XRSLAMBackendPose *out, int capacity);
+
+/**
+ * [2026-09-25] 同 XRSLAMDrainBackendPoses / XRSLAMGetBackendWindowPoses,记录多带速度与零偏。
+ * 🔴 与 XRSLAMDrainBackendPoses 取的是**同一个**事件队列:一个会话里只用其中一个,否则两边各拿一部分。
+ */
+int XRSLAMDrainBackendStates(XRSLAMBackendState *out, int capacity, unsigned long long *dropped);
+int XRSLAMGetBackendWindowStates(XRSLAMBackendState *out, int capacity);
 
 #ifdef __cplusplus
 }
