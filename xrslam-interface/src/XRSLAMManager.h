@@ -31,6 +31,8 @@ class XRSLAMManager {
     void RunOneFrame();
 
     void Destroy();
+    // Internal C++ adapter only: no change to the frozen public C ABI.
+    ProcessingSnapshot ObserveProcessing();
 
     void GetResultCameraPose(XRSLAMPose *pose) const;
     void GetResultBodyPose(XRSLAMPose *pose) const;

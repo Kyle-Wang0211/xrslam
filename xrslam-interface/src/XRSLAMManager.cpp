@@ -91,7 +91,25 @@ void XRSLAMManager::Init(std::shared_ptr<Config> config) {
               << " successfully-----------" << std::endl;
 }
 
+ProcessingSnapshot XRSLAMManager::ObserveProcessing() {
+    ProcessingSnapshot snapshot;
+    // The bench retains its common owner generation throughout observation.
+    // Try-lock also serializes with Destroy/Run without blocking cancellation.
+    std::unique_lock<std::mutex> input(input_mutex_, std::try_to_lock);
+    if (!input.owns_lock()) {
+        snapshot.core_present = true;
+        return snapshot;
+    }
+    return detail_ ? detail_->observe_processing() : snapshot;
+}
+
 void XRSLAMManager::Destroy() {
+    // Caller seals ingress/observers and holds the common-core owner/API lock.
+    // Workers do not acquire input_mutex_; keep image/config alive through join.
+    std::lock_guard<std::mutex> lck(input_mutex_);
+    detail_.reset(); // Existing Detail destructor stops/joins both workers.
+    cur_image_.reset();
+    config_.reset();
     std::cout << "-----------------Destroy XRSLAM v" << XRSLAM_VERSION
               << " successfully-----------" << std::endl;
 }

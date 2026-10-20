@@ -1,0 +1,93 @@
+{
+  "schema": "xrslam.portable.build-input-contract/1",
+  "status": "SOURCE_ONLY_NOT_A_COMPLETED_BUILD_RECIPE",
+  "upstream_commit": "4beb1a942f33da9afbfae2d70e2c641cfc2bb675",
+  "shared_profile": {
+    "threading": true,
+    "XRSLAM_IOS_defined": false,
+    "algorithm_branch": "common_pc_rd",
+    "cxx_standard": 17
+  },
+  "profile_include_first": "portable/profile/common/include",
+  "include_roots": [
+    "portable/profile/common/include",
+    "portable/bridge/src",
+    "portable/bridge/src/IO",
+    "xrslam/include",
+    "xrslam/src",
+    "xrslam-interface/include",
+    "xrslam-interface/src",
+    "xrslam-extra/include"
+  ],
+  "bridge_defines": {
+    "PW_XRSLAM_CORE_LINKED": 1,
+    "PW_XRSLAM_ARTIFACT_CONFIG_INPUT_MODE": 2
+  },
+  "core_translation_units": [
+    "xrslam/src/xrslam/ar/virtual_object_manager.cpp",
+    "xrslam/src/xrslam/config.cpp",
+    "xrslam/src/xrslam/core/detail.cpp",
+    "xrslam/src/xrslam/core/feature_tracker.cpp",
+    "xrslam/src/xrslam/core/frontend_worker.cpp",
+    "xrslam/src/xrslam/core/initializer.cpp",
+    "xrslam/src/xrslam/core/sliding_window_tracker.cpp",
+    "xrslam/src/xrslam/estimation/preintegrator.cpp",
+    "xrslam/src/xrslam/estimation/solver.cpp",
+    "xrslam/src/xrslam/geometry/essential.cpp",
+    "xrslam/src/xrslam/geometry/homography.cpp",
+    "xrslam/src/xrslam/geometry/lie_algebra.cpp",
+    "xrslam/src/xrslam/geometry/stereo.cpp",
+    "xrslam/src/xrslam/inspection.cpp",
+    "xrslam/src/xrslam/localizer/localizer.cpp",
+    "xrslam/src/xrslam/map/frame.cpp",
+    "xrslam/src/xrslam/map/map.cpp",
+    "xrslam/src/xrslam/map/track.cpp",
+    "xrslam/src/xrslam/utility/debug.cpp",
+    "xrslam/src/xrslam/utility/worker.cpp",
+    "xrslam/src/xrslam/xrslam.cpp",
+    "xrslam-extra/src/xrslam/extra/opencv_image.cpp",
+    "xrslam-extra/src/xrslam/extra/yaml_config.cpp",
+    "xrslam-interface/src/XRSLAMInternal.cpp",
+    "xrslam-interface/src/XRSLAMManager.cpp"
+  ],
+  "bridge_translation_units": [
+    "portable/bridge/src/XRSLAMBench.cpp",
+    "portable/bridge/src/XRSLAMOriginalIOReplay.cpp",
+    "portable/bridge/src/IO/dataset_reader.cpp",
+    "portable/bridge/src/IO/euroc_dataset_reader.cpp",
+    "portable/bridge/src/IO/async_dataset_reader.cpp",
+    "portable/bridge/src/IO/tum_dataset_reader.cpp",
+    "portable/bridge/src/PwXrslamTransportCore.cpp",
+    "portable/bridge/src/CommonCoreOwner.cpp"
+  ],
+  "config": {
+    "path": "portable/configs/xrslam_euroc_vio.yaml",
+    "sha256": "400e717ab48f4b6fc9a75420067c5e4347bc1ab544ff0299b3a4de4c98a8196b",
+    "recipe": "Existing common/EuRoC selection with RD enabled and min_keypoint_distance20; physical sensor K/extrinsic/timebase supplied separately."
+  },
+  "profiles": {
+    "common": "portable/profile/common/include/xrslam/version.h",
+    "host_generated_only": [
+      "portable/profile/host_generated/xrslam/version.h",
+      "portable/profile/host_generated/ceres/internal/config.h"
+    ],
+    "note": "Host-generated Ceres configuration is retained as source identity evidence, not asserted suitable for other platforms."
+  },
+  "external_dependencies": [
+    "Pinned upstream dependency sources and original notices remain required.",
+    "Eigen, OpenCV, Ceres, yaml-cpp, platform C++17/thread/filesystem toolchains and appropriate platform dependency configurations are not vendored or built by this export.",
+    "No compiled vendor objects, static archives, frameworks, signed libraries or generated toolchain binaries are included."
+  ],
+  "required_follow_up": [
+    "Integrate exact relative include paths, platform dependency pins and link ordering into a reviewed portable target.",
+    "Validate Linux/Android/Harmony/iOS builds independently before claiming platform support.",
+    "Keep one physical shared core owner, original reader/writer ordering and the qualified headless EOF observation semantics."
+  ],
+  "build_or_runtime_performed": false,
+  "apple_exported_symbols": {
+    "path": "portable/bridge/Exports35.apple.txt",
+    "sha256": "a4df0285d184469e30b24003f8dcf6563ad5a62992530b9af808c0326a5bbb26",
+    "symbol_count": 35,
+    "qualification": "Exact actual Apple underscore-symbol list; other platform linker adapters remain unvalidated."
+  }
+}

@@ -127,7 +127,7 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
     YAML::Node slam_config;
     YAML::Node device_config;
     try {
-#if defined(XRSLAM_IOS)
+#if defined(XRSLAM_CONFIG_FROM_TEXT)
         slam_config = YAML::Load(slam_config_filename);
 #else
         slam_config = YAML::LoadFile(slam_config_filename);
@@ -138,7 +138,7 @@ YamlConfig::YamlConfig(const std::string &slam_config_filename,
         throw LoadException(slam_config_filename);
     }
     try {
-#if defined(XRSLAM_IOS)
+#if defined(XRSLAM_CONFIG_FROM_TEXT)
         device_config = YAML::Load(device_config_filename);
 #else
         device_config = YAML::LoadFile(device_config_filename);

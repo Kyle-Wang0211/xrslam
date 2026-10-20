@@ -1,0 +1,19 @@
+{
+  "status": "SOURCE_NOTICES_PRESERVED_NO_COMMERCIAL_USE_VERDICT",
+  "upstream_commit": "4beb1a942f33da9afbfae2d70e2c641cfc2bb675",
+  "entries": [
+    {
+      "path": "LICENSE",
+      "action": "inherited_from_upstream",
+      "sha256": "15cf23cc585eb000c2b056dd16ba6741749a0ef0caf9719bb5876f92f21f8c64",
+      "git_blob": "aeda1d5c051acd527f14aa1e9026bf432021eb97",
+      "bytes": 11398
+    },
+    {
+      "path": "portable/profile/host_generated/ceres/internal/config.h",
+      "action": "embedded_original_Ceres_copyright_license_and_attribution_preserved",
+      "sha256": "5626c6d1bdc743fd37d1f2f80e91a2ba2b41c299c0e14ed86c751b8ab85cdf16"
+    }
+  ],
+  "note": "No external dependency implementation or binary is copied. Dependency notices remain required when integrating those dependencies."
+}

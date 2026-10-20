@@ -4,6 +4,7 @@
 #include <xrslam/common.h>
 #include <xrslam/xrslam.h>
 #include <mutex>
+#include <xrslam/utility/processing_status.h>
 namespace xrslam {
 
 class Config;
@@ -42,6 +43,9 @@ struct XRSLAM::Detail {
     std::unique_ptr<FeatureTracker> feature_tracker;
     std::unique_ptr<FrontendWorker> frontend;
 
+    // Safe, non-blocking snapshot; no input/poll/output/optimization is run.
+    ProcessingSnapshot observe_processing() const;
+
     SysState get_system_state() const;
 
     size_t create_virtual_object();
@@ -56,6 +60,9 @@ struct XRSLAM::Detail {
     void track_imu(const ImuData &imu);
     Pose predict_pose(const double &t);
 
+    // Covers the three ingress methods and pending-camera routing only.
+    // Workers never acquire this mutex. Existing VIO expressions are unchanged.
+    mutable std::mutex processing_input_mutex_;
     std::mutex latest_mutex_;
     double latest_timestamp_ = 0.0;
     Pose latest_pose_;

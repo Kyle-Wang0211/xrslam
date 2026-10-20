@@ -15,7 +15,9 @@ void Worker::worker_loop() {
 #endif
         if (!worker_running)
             break;
+        worker_active.store(true, std::memory_order_release);
         work(l);
+        worker_active.store(false, std::memory_order_release);
     }
 }
 

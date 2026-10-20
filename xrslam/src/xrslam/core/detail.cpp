@@ -45,6 +45,7 @@ const Config *XRSLAM::Detail::configurations() const { return config.get(); }
 
 Pose XRSLAM::Detail::track_gyroscope(const double &t, const double &x,
                                      const double &y, const double &z) {
+    std::lock_guard<std::mutex> processing_lock(processing_input_mutex_);
     if (accelerometers.size() > 0) {
         if (t < accelerometers.front().t) {
             gyroscopes.clear();
@@ -71,6 +72,7 @@ Pose XRSLAM::Detail::track_gyroscope(const double &t, const double &x,
 
 Pose XRSLAM::Detail::track_accelerometer(const double &t, const double &x,
                                          const double &y, const double &z) {
+    std::lock_guard<std::mutex> processing_lock(processing_input_mutex_);
     if (gyroscopes.size() > 0 && t >= gyroscopes.front().t) {
         if (t > gyroscopes.back().t) {
             while (gyroscopes.size() > 1) {
@@ -101,6 +103,7 @@ Pose XRSLAM::Detail::track_accelerometer(const double &t, const double &x,
 }
 
 Pose XRSLAM::Detail::track_camera(std::shared_ptr<Image> image) {
+    std::lock_guard<std::mutex> processing_lock(processing_input_mutex_);
     std::unique_ptr<Frame> frame = std::make_unique<Frame>();
     frame->K = config->camera_intrinsic();
     frame->image = image;
@@ -184,6 +187,20 @@ OutputObject XRSLAM::Detail::get_virtual_object_pose_by_id(size_t id) {
 
     OutputObject object = frontend->get_virtual_object_pose_by_id(id);
     return object;
+}
+
+ProcessingSnapshot XRSLAM::Detail::observe_processing() const {
+    ProcessingSnapshot snapshot;
+    snapshot.core_present = true;
+    std::unique_lock<std::mutex> ingress(processing_input_mutex_, std::try_to_lock);
+    if (!ingress.owns_lock()) return snapshot;
+    // Ingress -> FeatureTracker queue -> Frontend queue, all try-locks.
+    // Worker work releases its own queue lock before taking any map/other lock;
+    // this observer takes no map/pose lock and never mutates a queue.
+    snapshot.pending_camera = frames.size();
+    snapshot.observed = Worker::ObserveProcessingPair(
+        *feature_tracker, *frontend, snapshot.feature_tracker, snapshot.frontend);
+    return snapshot;
 }
 
 SysState XRSLAM::Detail::get_system_state() const {

@@ -45,6 +45,8 @@ class FrontendWorker : public Worker {
     std::tuple<double, size_t, PoseState, MotionState> latest_state;
     mutable std::mutex latest_state_mutex;
 
+    std::atomic<SysState> published_system_state{SYS_UNKNOWN};
+
     bool global_localization_flag = false;
 };
 

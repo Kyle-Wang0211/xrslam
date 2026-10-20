@@ -19,6 +19,7 @@ FrontendWorker::FrontendWorker(XRSLAM::Detail *detail,
     initializer = std::make_unique<Initializer>(config);
 
     latest_state = {{}, nil(), {}, {}};
+    published_system_state.store(SYS_INITIALIZING, std::memory_order_release);
 }
 
 FrontendWorker::~FrontendWorker() = default;
@@ -55,6 +56,7 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
             latest_state = {t, pending_frame_id, pose, motion};
             lk.unlock();
             initializer.reset();
+            published_system_state.store(SYS_TRACKING, std::memory_order_release);
         }
     } else if (sliding_window_tracker) {
         size_t pending_frame_id = pending_frame_ids.front();
@@ -81,6 +83,7 @@ void FrontendWorker::work(std::unique_lock<std::mutex> &l) {
             lk.unlock();
             initializer = std::make_unique<Initializer>(config);
             sliding_window_tracker.reset();
+            published_system_state.store(SYS_INITIALIZING, std::memory_order_release);
         }
     }
 }
@@ -118,12 +121,7 @@ OutputObject FrontendWorker::get_virtual_object_pose_by_id(size_t id) {
 }
 
 SysState FrontendWorker::get_system_state() const {
-    if (initializer) {
-        return SysState::SYS_INITIALIZING;
-    } else if (sliding_window_tracker) {
-        return SysState::SYS_TRACKING;
-    }
-    return SysState::SYS_UNKNOWN;
+    return published_system_state.load(std::memory_order_acquire);
 }
 
 void FrontendWorker::query_frame() {
